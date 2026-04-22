@@ -210,6 +210,9 @@ def normalize_market(raw):
     period_label = kalshi_period_label(st)
     if period_label == "F5":
         return None
+    # League hint: lets the matcher constrain Pinnacle candidates by sport
+    # (MLB->Baseball, NHL->Hockey, ...) to avoid cross-league city-name collisions.
+    league = series_ticker_league(st)
 
     def _nm(market_type, line, team, side):
         return NormalizedMarket(
@@ -225,6 +228,7 @@ def normalize_market(raw):
             side=side,
             start_time=start_time,
             raw=raw,
+            league=league,
         )
 
     if TEAMTOTAL_MARKER in st:
@@ -279,7 +283,6 @@ def normalize_market(raw):
         # Team abbreviation: third hyphen-delimited chunk's leading 3 chars.
         parts = ticker.split("-")
         team_abbrev = parts[2][:3] if len(parts) >= 3 and len(parts[2]) >= 3 else None
-        league = series_ticker_league(st)
         pin_team = resolve_team_abbrev(team_abbrev, league) if team_abbrev else None
 
         nm = NormalizedMarket(
@@ -297,6 +300,7 @@ def normalize_market(raw):
             raw=raw,
             player=player,
             stat=stat_canonical,
+            league=league,
         )
         return nm
 

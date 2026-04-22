@@ -31,6 +31,10 @@ class NormalizedMarket:
     raw: dict                         # pass-through for diagnostics
     player: Optional[str] = None      # player_prop: full name as printed by the book
     stat: Optional[str] = None        # player_prop: canonical stat key (see CANONICAL_STAT)
+    league: Optional[str] = None      # "NBA" | "NHL" | "MLB" | "NFL" | "WNBA" | "NCAAF" | "NCAAB" | None
+                                      # Used by matcher to constrain candidate Pinnacle rows to the
+                                      # correct sport — prevents Kalshi MLB tickers fuzzy-matching
+                                      # AHL hockey games that share city names.
 
 
 # Canonical stat keys for player props. Both the Kalshi series suffix and the
@@ -152,6 +156,100 @@ def series_ticker_league(series_ticker):
         if series_ticker.startswith(prefix):
             return league
     return None
+
+
+# League hint -> Pinnacle `sport` field. Pinnacle exposes only the broad sport
+# name (Title Case English), not a league. Filtering candidate Pinnacle rows by
+# this map prevents the Apr-2026 Eagles incident: Kalshi MLB ticker for
+# "San Diego at Colorado" fuzzy-matched AHL "Colorado Eagles vs San Diego Gulls"
+# because (a) fuzzy_match accepts city-only prefixes and (b) the matcher
+# previously iterated all Pinnacle moneylines regardless of sport.
+LEAGUE_TO_PIN_SPORT = {
+    "NBA":   "Basketball",
+    "WNBA":  "Basketball",
+    "NCAAB": "Basketball",
+    "NHL":   "Hockey",
+    "MLB":   "Baseball",
+    "NFL":   "Football",
+    "NCAAF": "Football",
+}
+
+
+def pin_sport_for_league(league):
+    """Pinnacle `sport` value expected for a league hint, or None if unknown.
+    None disables sport filtering for that row (preserves prior behavior)."""
+    if not league:
+        return None
+    return LEAGUE_TO_PIN_SPORT.get(league.upper())
+
+
+# Per-league full-team-name allowlists. The sport filter alone (NBA -> Basketball)
+# does not stop a Kalshi NHL ticker for "Colorado" from matching Pinnacle's AHL
+# "Colorado Eagles" -- both are sport=Hockey. Requiring both Pinnacle participants
+# to be in the league's allowlist closes that hole. Maintained by hand for the
+# four majors + WNBA; NCAA is intentionally absent (~130 FBS / ~350 D1 schools is
+# unmaintainable, and Polymarket's event_id binding mostly handles it).
+_NBA_TEAMS = frozenset(TEAM_ABBREV_BY_LEAGUE["NBA"].values())
+_NHL_TEAMS = frozenset(TEAM_ABBREV_BY_LEAGUE["NHL"].values())
+_MLB_TEAMS = frozenset({
+    "Arizona Diamondbacks", "Atlanta Braves", "Baltimore Orioles", "Boston Red Sox",
+    "Chicago Cubs", "Chicago White Sox", "Cincinnati Reds", "Cleveland Guardians",
+    "Colorado Rockies", "Detroit Tigers", "Houston Astros", "Kansas City Royals",
+    "Los Angeles Angels", "Los Angeles Dodgers", "Miami Marlins", "Milwaukee Brewers",
+    "Minnesota Twins", "New York Mets", "New York Yankees",
+    # Athletics relocation in flux (Oakland -> Sacramento -> Las Vegas). Pinnacle
+    # may publish either form; keep both.
+    "Oakland Athletics", "Athletics",
+    "Philadelphia Phillies", "Pittsburgh Pirates", "San Diego Padres",
+    "San Francisco Giants", "Seattle Mariners", "St. Louis Cardinals",
+    "Tampa Bay Rays", "Texas Rangers", "Toronto Blue Jays", "Washington Nationals",
+})
+_NFL_TEAMS = frozenset({
+    "Arizona Cardinals", "Atlanta Falcons", "Baltimore Ravens", "Buffalo Bills",
+    "Carolina Panthers", "Chicago Bears", "Cincinnati Bengals", "Cleveland Browns",
+    "Dallas Cowboys", "Denver Broncos", "Detroit Lions", "Green Bay Packers",
+    "Houston Texans", "Indianapolis Colts", "Jacksonville Jaguars", "Kansas City Chiefs",
+    "Las Vegas Raiders", "Los Angeles Chargers", "Los Angeles Rams", "Miami Dolphins",
+    "Minnesota Vikings", "New England Patriots", "New Orleans Saints", "New York Giants",
+    "New York Jets", "Philadelphia Eagles", "Pittsburgh Steelers",
+    "San Francisco 49ers", "Seattle Seahawks", "Tampa Bay Buccaneers",
+    "Tennessee Titans", "Washington Commanders",
+})
+_WNBA_TEAMS = frozenset({
+    "Atlanta Dream", "Chicago Sky", "Connecticut Sun", "Dallas Wings",
+    "Golden State Valkyries", "Indiana Fever", "Las Vegas Aces",
+    "Los Angeles Sparks", "Minnesota Lynx", "New York Liberty",
+    "Phoenix Mercury", "Seattle Storm", "Washington Mystics",
+})
+
+LEAGUE_TEAM_ALLOWLIST = {
+    "NBA":  _NBA_TEAMS,
+    "WNBA": _WNBA_TEAMS,
+    "NHL":  _NHL_TEAMS,
+    "MLB":  _MLB_TEAMS,
+    "NFL":  _NFL_TEAMS,
+}
+
+
+def league_team_allowlist(league):
+    """Frozenset of full team names known to belong to this league, or None
+    when no allowlist exists (caller skips the team-allowlist filter)."""
+    if not league:
+        return None
+    return LEAGUE_TEAM_ALLOWLIST.get(league.upper())
+
+
+def team_in_league(team, allowlist):
+    """True if `team` matches any allowlist member via fuzzy_match in either
+    direction. Bidirectional handles Pinnacle's longer forms ("Oakland Athletics"
+    vs allowlist "Athletics") and soft-book shortenings ("Athletics" vs
+    allowlist "Oakland Athletics") symmetrically."""
+    if not team or not allowlist:
+        return False
+    for known in allowlist:
+        if fuzzy_match(team, known) or fuzzy_match(known, team):
+            return True
+    return False
 
 
 # Strip common player-name suffixes when building a fuzzy key. Kalshi

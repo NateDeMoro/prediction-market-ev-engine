@@ -22,7 +22,10 @@ from adapters.common import (
     NormalizedMarket,
     canonical_stat,
     fuzzy_match,
+    league_team_allowlist,
+    pin_sport_for_league,
     player_key,
+    team_in_league,
 )
 
 PIN_PERIOD_LABEL = {0: "FULL", 1: "1H", 2: "2H"}
@@ -226,9 +229,23 @@ def match_markets(pin_rows, soft_moneylines):
         k_t1, k_t2 = parsed
 
         ks_anchor, tolerance_sec = _anchor_for(nm)
+        # Sport gate from the soft-book's league hint. None = unknown league
+        # (preserves prior behavior for adapters/series that don't supply one).
+        expected_sport = pin_sport_for_league(nm.league)
+        # Same-sport collision gate: require both Pinnacle participants to be
+        # in the league's team allowlist (closes the NHL-vs-AHL hole that the
+        # sport filter alone misses). None = no allowlist for this league
+        # (NCAA, etc.) -> skip this gate.
+        allowlist = league_team_allowlist(nm.league)
 
         candidates = []
         for pin, p_a, p_b in pin_indexed:
+            if expected_sport is not None and pin.get("sport") != expected_sport:
+                continue
+            if allowlist is not None and not (
+                team_in_league(p_a, allowlist) and team_in_league(p_b, allowlist)
+            ):
+                continue
             if ((fuzzy_match(k_t1, p_a) and fuzzy_match(k_t2, p_b))
                     or (fuzzy_match(k_t1, p_b) and fuzzy_match(k_t2, p_a))):
                 pin_start = parse_iso(pin.get("startTime"))

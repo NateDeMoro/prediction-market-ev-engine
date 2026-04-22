@@ -120,6 +120,11 @@ def normalize_market(raw):
     title = event.get("event_title") or market.get("question") or ""
     description = side.get("description") or ""
     team = side.get("team_name")
+    # League hint (poller stores `league` on each row's event meta as the
+    # lowercase Polymarket slug). Matcher uses it to constrain candidate
+    # Pinnacle rows by sport — see `pin_sport_for_league`.
+    league_raw = event.get("league")
+    league = league_raw.upper() if isinstance(league_raw, str) and league_raw else None
 
     def _nm(line_val, team_val, side_val):
         return NormalizedMarket(
@@ -135,6 +140,7 @@ def normalize_market(raw):
             side=side_val,
             start_time=start_time,
             raw=raw,
+            league=league,
         )
 
     if market_type == "moneyline":
