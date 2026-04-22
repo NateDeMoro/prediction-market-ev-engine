@@ -19,6 +19,7 @@ Stop: Ctrl-C (writes a final snapshot and exits cleanly)
 """
 import json
 import os
+import re
 import sys
 import time
 import hashlib
@@ -35,6 +36,14 @@ LIVE_LOOKBACK_HOURS = 6      # include live games that started up to 6h ago
 REQUEST_TIMEOUT = 15
 INTER_REQUEST_SLEEP = 0.2  # 5 req/sec ceiling, well under any rate limit
 SNAPSHOT_RETENTION = 60      # keep the N most recent snapshots (≈ last hour)
+
+# Player-prop ingestion: 2 extra calls per parent matchup. PROP_SPORTS is a
+# cheap first-pass on Pinnacle's broad sport name; PROP_LEAGUES is the precise
+# filter applied after we've fetched /related (which carries league.name on the
+# parent). See data/pinnacle_probe/NOTES.md.
+INCLUDE_PROPS = os.getenv("PINNACLE_INCLUDE_PROPS") == "1"
+PROP_SPORTS = {"Basketball", "Hockey"}
+PROP_LEAGUES = {"NBA", "NHL"}
 
 DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(DIR, "data")
@@ -155,6 +164,28 @@ def fetch_live_matchup_markets(matchup_id):
     return get(f"/matchups/{matchup_id}/markets/related/straight")
 
 
+def fetch_related_matchups(parent_id):
+    """Enumerate child matchups under a parent. Player props arrive here as
+    type=='special' rows with special.category == 'Player Props'."""
+    return get(f"/matchups/{parent_id}/related")
+
+
+_PROP_DESC_RE = re.compile(
+    r"^(?P<player>.+?)\s*\((?P<stat>[^)]+)\)(?:\s*\([^)]+\))?\s*$"
+)
+
+
+def parse_prop_description(desc):
+    """'Sidney Crosby (Points)' -> ('Sidney Crosby', 'Points').
+    Strips trailing parenthetical metadata like '(must start)'."""
+    if not desc:
+        return None, None
+    m = _PROP_DESC_RE.match(desc.strip())
+    if not m:
+        return None, None
+    return m.group("player").strip(), m.group("stat").strip()
+
+
 def market_fingerprint(market):
     """Stable hash of a market's prices. Ignores key fields so we detect price moves."""
     prices = market.get("prices") or []
@@ -258,6 +289,95 @@ def record_market(market, matchup, sport_name, is_live, snapshot,
     return changed
 
 
+def collect_prop_rows(parent_matchup, sport_name, snapshot, prev_fps, new_fps):
+    """For a pregame parent matchup in a prop-target league, fetch and emit
+    per-player prop rows. Two HTTP calls: /related (enumerate child matchups +
+    player/stat metadata) and /markets/related/straight (price rows for the
+    whole tree). Returns (rows_emitted, changes_emitted) or (0, 0) on skip.
+    """
+    parent_id = parent_matchup["id"]
+    try:
+        related = fetch_related_matchups(parent_id)
+    except requests.HTTPError as e:
+        log(f"  ! prop /related failed for {parent_id}: {e}")
+        return 0, 0
+
+    # Verify league via the parent record returned in /related (carries league.name).
+    parent_rec = next((m for m in related if m.get("id") == parent_id), None)
+    league_name = ((parent_rec or {}).get("league") or {}).get("name")
+    if league_name not in PROP_LEAGUES:
+        return 0, 0
+
+    # Build child_matchupId -> (player, stat, units) for every player-prop child.
+    prop_meta = {}
+    for m in related:
+        if m.get("type") != "special":
+            continue
+        sp = m.get("special") or {}
+        if sp.get("category") != "Player Props":
+            continue
+        player, stat = parse_prop_description(sp.get("description", ""))
+        if not player:
+            continue
+        prop_meta[m["id"]] = (player, stat, m.get("units"))
+
+    if not prop_meta:
+        return 0, 0
+
+    try:
+        markets = fetch_live_matchup_markets(parent_id)
+    except requests.HTTPError as e:
+        log(f"  ! prop markets failed for {parent_id}: {e}")
+        return 0, 0
+
+    home, away = matchup_participants(parent_matchup)
+    matchup_str = f"{home} vs {away}"
+    rows_emitted = 0
+    changes_emitted = 0
+    for mk in markets:
+        prop_id = mk.get("matchupId")
+        if prop_id not in prop_meta:
+            continue
+        player, stat, units = prop_meta[prop_id]
+        prices = mk.get("prices") or []
+        # Prop price rows have no 'designation'; line lives in prices[*].points.
+        line = next((p.get("points") for p in prices if p.get("points") is not None), None)
+
+        # Custom fingerprint key: prop child id is unique per (player, stat).
+        k = f"prop|{prop_id}"
+        fp = market_fingerprint(mk)
+        new_fps[k] = fp
+        if prev_fps.get(k) != fp:
+            tag = "NEW" if prev_fps.get(k) is None else "CHG"
+            ps = " | ".join(
+                f"{p.get('participantId','?')}={p.get('price'):+d}"
+                if isinstance(p.get('price'), int) else f"{p.get('participantId','?')}={p.get('price')}"
+                for p in prices
+            )
+            log(f"{tag} {matchup_str} PROP {player} ({stat}) line={line}: {ps}")
+            changes_emitted += 1
+
+        snapshot.append({
+            "sport": sport_name,
+            "league": league_name,
+            "matchupId": parent_id,
+            "prop_matchupId": prop_id,
+            "matchup": matchup_str,
+            "startTime": parent_matchup.get("startTime"),
+            "isLive": False,
+            "period": 0,
+            "type": "player_prop",
+            "player": player,
+            "stat": stat,
+            "stat_units": units,
+            "line": line,
+            "prices": prices,
+        })
+        rows_emitted += 1
+
+    return rows_emitted, changes_emitted
+
+
 def run_cycle(prev_fps):
     """Execute one poll cycle. Returns (new_fps dict, stats)."""
     now = datetime.now(timezone.utc)
@@ -270,6 +390,7 @@ def run_cycle(prev_fps):
     pregame_count = 0
     live_count = 0
     market_count = 0
+    prop_row_count = 0
     snapshot = []
 
     for sport in sports:
@@ -323,6 +444,18 @@ def run_cycle(prev_fps):
                                  snapshot, prev_fps, new_fps, log):
                     changes += 1
 
+        # Player props: 2 extra calls per pregame parent in NBA/NHL. Pre-filter
+        # by league.name (carried on every raw matchup) so we don't burn calls
+        # on Brazilian NBB / AHL / KHL / Euroleague etc. — Kalshi has no prop
+        # series for those, so any matches would be impossible.
+        if INCLUDE_PROPS and sname in PROP_SPORTS:
+            for parent in pregame:
+                if ((parent.get("league") or {}).get("name")) not in PROP_LEAGUES:
+                    continue
+                rows, ch = collect_prop_rows(parent, sname, snapshot, prev_fps, new_fps)
+                prop_row_count += rows
+                changes += ch
+
     if snapshot:
         snap_path = os.path.join(
             SNAPSHOT_DIR, now.strftime("%Y%m%dT%H%M%SZ") + ".jsonl"
@@ -340,6 +473,7 @@ def run_cycle(prev_fps):
         "pregame": pregame_count,
         "live": live_count,
         "markets": market_count,
+        "prop_rows": prop_row_count,
         "changes": changes,
     }
 
@@ -349,7 +483,10 @@ def main():
     signal.signal(signal.SIGTERM, handle_sigterm)
     signal.signal(signal.SIGINT, handle_sigterm)
 
-    log(f"poller starting: window=+{WINDOW_HOURS}h  live_lookback=-{LIVE_LOOKBACK_HOURS}h  interval={POLL_INTERVAL_SEC}s")
+    log(
+        f"poller starting: window=+{WINDOW_HOURS}h  live_lookback=-{LIVE_LOOKBACK_HOURS}h  "
+        f"interval={POLL_INTERVAL_SEC}s  include_props={INCLUDE_PROPS}"
+    )
     prev_fps = {}
     cycle = 0
     while _running:
@@ -361,8 +498,8 @@ def main():
             log(
                 f"cycle {cycle} ok: sports={stats['sports']} "
                 f"pregame={stats['pregame']} live={stats['live']} "
-                f"markets={stats['markets']} changes={stats['changes']} "
-                f"elapsed={elapsed:.1f}s"
+                f"markets={stats['markets']} prop_rows={stats['prop_rows']} "
+                f"changes={stats['changes']} elapsed={elapsed:.1f}s"
             )
         except Exception as e:
             log(f"cycle {cycle} FAILED: {type(e).__name__}: {e}")

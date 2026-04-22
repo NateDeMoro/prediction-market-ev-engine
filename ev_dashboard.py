@@ -13,6 +13,7 @@ Run: python3 ev_dashboard.py
 Stop: Ctrl-C
 """
 import json
+import os
 import threading
 import time
 import traceback
@@ -22,6 +23,7 @@ from flask import Flask, jsonify, render_template_string
 
 from adapters import adapter_for, all_adapters
 from find_ev_bet import (
+    PROP_MIN_EDGE_PCT,
     SNAP_PIN,
     MAX_SNAPSHOT_AGE_SEC,
     american_to_decimal,
@@ -110,6 +112,10 @@ def scan_once():
 
         shares, stake, exp_profit, levels = walk_ladder(ladder, fair, fee_fn)
         ev_pct_on_stake = (exp_profit / stake * 100) if stake > 0 else 0.0
+        # Player-prop edge gate: suppress marginal rows since prop vig + noise
+        # easily fakes out a +1-2% "edge". See find_ev_bet.PROP_MIN_EDGE_PCT.
+        if c["market_type"] == "player_prop" and ev_pct_on_stake < PROP_MIN_EDGE_PCT:
+            continue
         vig_pct = (
             1 / american_to_decimal(c["yes_side_price"])
             + 1 / american_to_decimal(c["opposite_side_price"])
@@ -147,6 +153,8 @@ def scan_once():
             "pos_ev_pct": ev_pct_on_stake,
             "pin_start_time": c.get("pin_start_time"),
             "in_window": c.get("in_window", False),
+            "player": c.get("player"),
+            "stat": c.get("stat"),
         })
 
     # Rank: in-window first, then by ev_per_share descending. Always surfaces
@@ -202,10 +210,11 @@ PAGE = """<!doctype html>
            background: #2a2d34; color: #9aa3b2; margin-left: 6px; vertical-align: middle; }
   .mtype { text-transform: uppercase; letter-spacing: 0.04em; font-size: 10px;
            padding: 2px 6px; border-radius: 3px; font-weight: 600; }
-  .mtype.moneyline  { background: #1e3a5f; color: #93c5fd; }
-  .mtype.spread     { background: #3a2d6a; color: #c4b5fd; }
-  .mtype.total      { background: #0f4a3a; color: #6ee7b7; }
-  .mtype.team_total { background: #5a3a1e; color: #fcd34d; }
+  .mtype.moneyline   { background: #1e3a5f; color: #93c5fd; }
+  .mtype.spread      { background: #3a2d6a; color: #c4b5fd; }
+  .mtype.total       { background: #0f4a3a; color: #6ee7b7; }
+  .mtype.team_total  { background: #5a3a1e; color: #fcd34d; }
+  .mtype.player_prop { background: #4c1d3d; color: #f9a8d4; }
   .book { text-transform: uppercase; letter-spacing: 0.04em; font-size: 10px;
           padding: 2px 6px; border-radius: 3px; font-weight: 600; margin-left: 4px; }
   .book.kalshi     { background: #1a3524; color: #86efac; }
@@ -243,6 +252,7 @@ PAGE = """<!doctype html>
     <span class="chip active" data-f="spread">spread</span>
     <span class="chip active" data-f="total">total</span>
     <span class="chip active" data-f="team_total">team total</span>
+    <span class="chip active" data-f="player_prop">player prop</span>
   </div>
   <div id="err"></div>
   <table>
@@ -302,7 +312,8 @@ function render(data) {
       ' (ML ' + (s.matched_moneyline || 0) +
       ' / SP ' + (s.matched_spread || 0) +
       ' / TO ' + (s.matched_total || 0) +
-      ' / TT ' + (s.matched_team_total || 0) + ')';
+      ' / TT ' + (s.matched_team_total || 0) +
+      ' / PROP ' + (s.matched_player_prop || 0) + ')';
 
   tbody.innerHTML = '';
   (data.rows || []).forEach((r, i) => {
@@ -315,6 +326,7 @@ function render(data) {
     const mtype = r.market_type || 'moneyline';
     const mtypeLabel = mtype === 'moneyline' ? 'ML' :
                        mtype === 'team_total' ? 'TT' :
+                       mtype === 'player_prop' ? 'PROP' :
                        mtype.slice(0,3).toUpperCase();
     const bookBadge = r.book ?
         '<span class="book ' + r.book + '">' + r.book + '</span>' : '';
@@ -434,10 +446,11 @@ PAPER_PAGE = """<!doctype html>
   .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
   .mtype { text-transform: uppercase; letter-spacing: 0.04em; font-size: 10px;
            padding: 2px 6px; border-radius: 3px; font-weight: 600; }
-  .mtype.moneyline  { background: #1e3a5f; color: #93c5fd; }
-  .mtype.spread     { background: #3a2d6a; color: #c4b5fd; }
-  .mtype.total      { background: #0f4a3a; color: #6ee7b7; }
-  .mtype.team_total { background: #5a3a1e; color: #fcd34d; }
+  .mtype.moneyline   { background: #1e3a5f; color: #93c5fd; }
+  .mtype.spread      { background: #3a2d6a; color: #c4b5fd; }
+  .mtype.total       { background: #0f4a3a; color: #6ee7b7; }
+  .mtype.team_total  { background: #5a3a1e; color: #fcd34d; }
+  .mtype.player_prop { background: #4c1d3d; color: #f9a8d4; }
   .book { text-transform: uppercase; letter-spacing: 0.04em; font-size: 10px;
           padding: 2px 6px; border-radius: 3px; font-weight: 600; margin-left: 4px; }
   .book.kalshi     { background: #1a3524; color: #86efac; }
@@ -498,7 +511,10 @@ function bookBadge(r) {
 }
 function mtypeCell(r) {
   const m = r.market_type || 'moneyline';
-  const label = m === 'moneyline' ? 'ML' : m === 'team_total' ? 'TT' : m.slice(0,3).toUpperCase();
+  const label = m === 'moneyline' ? 'ML'
+              : m === 'team_total' ? 'TT'
+              : m === 'player_prop' ? 'PROP'
+              : m.slice(0,3).toUpperCase();
   const period = (r.period_label && r.period_label !== 'FULL') ?
       ' <span class="muted">' + r.period_label + '</span>' : '';
   return '<span class="mtype ' + m + '">' + label + '</span>' + bookBadge(r) + period;
@@ -640,8 +656,9 @@ def main():
     t.start()
     paper_tracker.start_settlement_thread()
     paper_tracker.start_close_capture_thread()
-    print("dashboard starting on http://127.0.0.1:5055")
-    app.run(host="127.0.0.1", port=5055, debug=False, use_reloader=False)
+    host = os.environ.get("EV_DASHBOARD_HOST", "127.0.0.1")
+    print(f"dashboard starting on http://{host}:5055")
+    app.run(host=host, port=5055, debug=False, use_reloader=False)
 
 
 if __name__ == "__main__":

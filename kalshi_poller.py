@@ -67,6 +67,24 @@ def prune_snapshots(dir_path, keep_n):
 # with a clean Pinnacle counterpart. Prop/stat series are excluded.
 CORE_SUFFIX = re.compile(r"(GAME|SPREAD|TOTAL|ML|H2H)$")
 
+# Per-game player-prop series. Allowlist (not regex) because the noncore Sports
+# bucket has ~210 series, ~190 of which are season-long awards/draft/standings
+# markets with no per-game Pinnacle counterpart. See data/kalshi_probe/NOTES.md.
+# NBA + NHL active today; NFL/MLB included for when their seasons start.
+PER_GAME_PROP_SERIES = {
+    # NBA
+    "KXNBAPTS", "KXNBAREB", "KXNBAAST", "KXNBABLK", "KXNBASTL", "KXNBA3PT",
+    "KXNBAPRA", "KXNBAPR", "KXNBARA", "KXNBAPA",
+    # NHL
+    "KXNHLPTS", "KXNHLGOALS", "KXNHLSOG",
+    # NFL
+    "KXNFLPASSYDS", "KXNFLPASSTDS", "KXNFLRSHYDS", "KXNFLRECYDS",
+    "KXNFLREC", "KXNFLANYTD", "KXNFLNEXTTD",
+}
+
+# Opt-in via env-var so the existing team-market pipeline runs untouched until rollout.
+INCLUDE_PROPS = os.getenv("KALSHI_INCLUDE_PROPS") == "1"
+
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -111,10 +129,13 @@ def get(path, **params):
 
 
 def fetch_core_sports_series():
-    """List every Sports series whose ticker ends in GAME/SPREAD/TOTAL/ML/H2H."""
+    """List Sports series for ingestion: core team-market series, plus the
+    per-game player-prop allowlist when INCLUDE_PROPS is set."""
     data = get("/series", category="Sports")
     series = data.get("series", [])
     core = [s for s in series if CORE_SUFFIX.search(s.get("ticker", ""))]
+    if INCLUDE_PROPS:
+        core += [s for s in series if s.get("ticker") in PER_GAME_PROP_SERIES]
     return core
 
 
@@ -269,7 +290,10 @@ def main():
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
 
-    log(f"kalshi poller starting: window={WINDOW_HOURS}h interval={POLL_INTERVAL_SEC}s")
+    log(
+        f"kalshi poller starting: window={WINDOW_HOURS}h interval={POLL_INTERVAL_SEC}s "
+        f"include_props={INCLUDE_PROPS}"
+    )
 
     try:
         core_series = fetch_core_sports_series()

@@ -40,6 +40,13 @@ from adapters.common import fuzzy_match
 INITIAL_BANKROLL = 5000.0
 KELLY_FRACTION = 0.25
 MIN_EDGE_PCT = 2.0             # skip placement if expected_profit/stake < this
+# Player-prop edge gate is higher than team markets (Pinnacle's prop max-stake
+# is ~$250 vs $7.5k+ for team totals/MLs; quotes are noisier). Also gated by
+# INCLUDE_PROPS below so props stay out of paper trading until explicitly
+# enabled — first week of prop data should land on the dashboard only so CLV
+# for team markets isn't contaminated.
+PROP_MIN_EDGE_PCT = float(os.getenv("PROP_MIN_EDGE", "4.0"))
+INCLUDE_PROPS = os.getenv("PAPER_INCLUDE_PROPS") == "1"
 SETTLEMENT_POLL_SEC = 30 * 60
 # Closing-line-value capture cadence. Runs frequently so we hit the ~60-s
 # window around startTime before the Pinnacle snapshot that contains the
@@ -266,6 +273,9 @@ def maybe_place(row, ladder, now=None):
     market_id = nm.market_id
     if not market_id:
         return None
+    is_prop = row.get("market_type") == "player_prop"
+    if is_prop and not INCLUDE_PROPS:
+        return None
     key = _key(book, market_id)
 
     with _lock:
@@ -280,7 +290,8 @@ def maybe_place(row, ladder, now=None):
 
     edge_pct = (sized["expected_profit"] / sized["stake"] * 100.0
                 if sized["stake"] > 0 else 0.0)
-    if edge_pct < MIN_EDGE_PCT:
+    min_edge = PROP_MIN_EDGE_PCT if is_prop else MIN_EDGE_PCT
+    if edge_pct < min_edge:
         return None
 
     when = (now or datetime.now(timezone.utc)).isoformat()
@@ -297,6 +308,9 @@ def maybe_place(row, ladder, now=None):
         "market_type": row.get("market_type"),
         "period_label": row.get("period_label"),
         "line": row.get("line"),
+        "player": row.get("player"),
+        "stat": row.get("stat"),
+        "prop_matchup_id": row.get("pin_prop_matchup_id"),
         "selection": row.get("selection"),
         "yes_side_label": row.get("yes_side_label"),
         "yes_designation": row.get("yes_designation"),
@@ -400,13 +414,31 @@ def _find_pin_prices(pin_rows, record):
         return None
 
     team_side = _team_side_from_record(record) if mtype == "team_total" else None
+    prop_matchup_id = record.get("prop_matchup_id") if mtype == "player_prop" else None
 
     for r in pin_rows:
         if r.get("matchupId") != matchup_id:
             continue
-        if r.get("period") != period or r.get("type") != mtype:
+        if r.get("type") != mtype:
+            continue
+        if mtype != "player_prop" and r.get("period") != period:
             continue
         if mtype == "team_total" and team_side is not None and r.get("side") != team_side:
+            continue
+        if mtype == "player_prop":
+            # Narrow by prop-child matchupId when we have one stored; else by
+            # (canonical stat, line) against this record.
+            if prop_matchup_id is not None and r.get("prop_matchupId") != prop_matchup_id:
+                continue
+            if line is not None and abs((r.get("line") or 0) - line) >= 1e-9:
+                continue
+            prices = r.get("prices") or []
+            if len(prices) != 2:
+                continue
+            yes_price = prices[0].get("price")  # Over
+            opp_price = prices[1].get("price")  # Under
+            if yes_price is not None and opp_price is not None:
+                return yes_price, opp_price
             continue
 
         prices = r.get("prices") or []

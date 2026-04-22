@@ -17,7 +17,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from adapters import adapter_for
-from adapters.common import NormalizedMarket, fuzzy_match
+from adapters.common import (
+    COMBO_STATS,
+    NormalizedMarket,
+    canonical_stat,
+    fuzzy_match,
+    player_key,
+)
 
 PIN_PERIOD_LABEL = {0: "FULL", 1: "1H", 2: "2H"}
 PERIOD_LABEL_TO_INT = {v: k for k, v in PIN_PERIOD_LABEL.items()}
@@ -136,6 +142,7 @@ class MatchedPair:
     selection: str
     yes_designation: str
     opposite_designation: str
+    pin_prop_matchup_id: int = None  # player_prop only; None for team markets
 
 
 @dataclass
@@ -330,6 +337,79 @@ def _find_total_prices(pin_markets, line):
     return None
 
 
+def load_pinnacle_props(rows):
+    """Subset of a Pinnacle snapshot that are player-prop rows.
+
+    Each row has type=='player_prop' with player, stat / stat_units, line,
+    and a 2-price list (Over / Under keyed by participantId). Emitted by
+    `pinnacle_poller.collect_prop_rows` when PINNACLE_INCLUDE_PROPS=1.
+    """
+    out = []
+    for r in rows:
+        if r.get("type") != "player_prop":
+            continue
+        if len(r.get("prices") or []) != 2:
+            continue
+        out.append(r)
+    return out
+
+
+def _pinnacle_prop_index(pin_prop_rows):
+    """(matchup_id, canonical_stat, player_key) -> list of Pinnacle prop rows.
+
+    Index can have multiple rows per key when Pinnacle publishes alt lines
+    for the same player+stat (uncommon on props, but handled).
+    """
+    idx = {}
+    for r in pin_prop_rows:
+        stat = canonical_stat(r.get("stat_units")) or canonical_stat(r.get("stat"))
+        if stat is None:
+            continue
+        pkey = player_key(r.get("player"))
+        if not pkey:
+            continue
+        idx.setdefault((r.get("matchupId"), stat, pkey), []).append(r)
+    return idx
+
+
+def _pinnacle_prop_fuzzy_lookup(idx, matchup_id, stat, pkey):
+    """Exact lookup first; fall back to fuzzy_match across same-(matchup, stat)
+    entries when a literal key miss is likely a name-suffix mismatch (rare
+    but Kalshi/Pinnacle disagree on suffixes for a handful of players)."""
+    exact = idx.get((matchup_id, stat, pkey))
+    if exact:
+        return exact
+    candidates = []
+    for (mid, s, pk), rows in idx.items():
+        if mid != matchup_id or s != stat:
+            continue
+        if fuzzy_match(pkey, pk) or fuzzy_match(pk, pkey):
+            candidates.extend(rows)
+    return candidates
+
+
+def _find_prop_prices(pin_prop_rows, line):
+    """Find the Pinnacle prop row whose line matches `line`. Return
+    (over_price, under_price) or None. Pinnacle prop prices have
+    participant order [Over, Under] per participants[0/1] in the related
+    matchup — captured by `pinnacle_poller.collect_prop_rows` which preserves
+    that order in the prices list.
+    """
+    for r in pin_prop_rows:
+        if abs((r.get("line") or 0) - line) >= 1e-9:
+            continue
+        prices = r.get("prices") or []
+        if len(prices) != 2:
+            continue
+        # prices[0] = Over (participants order 0); prices[1] = Under.
+        over_price = prices[0].get("price")
+        under_price = prices[1].get("price")
+        if over_price is None or under_price is None:
+            continue
+        return r, over_price, under_price
+    return None
+
+
 def _find_team_total_prices(pin_markets, target_side, line):
     for r in pin_markets:
         if r.get("side") != target_side:
@@ -463,16 +543,28 @@ def match_all_markets(pin_rows, soft_markets):
         t = r.get("type")
         pin_index.setdefault(mid, {}).setdefault(period, {}).setdefault(t, []).append(r)
 
+    # Pinnacle player-prop index, built once.
+    pin_prop_rows = load_pinnacle_props(pin_rows)
+    prop_index = _pinnacle_prop_index(pin_prop_rows)
+
     stats = {
         "nonml_total": len(soft_nonml),
-        "by_type": {"spread": 0, "total": 0, "team_total": 0},
-        "matched_by_type": {"spread": 0, "total": 0, "team_total": 0},
+        "by_type": {"spread": 0, "total": 0, "team_total": 0, "player_prop": 0},
+        "matched_by_type": {"spread": 0, "total": 0, "team_total": 0, "player_prop": 0},
         "no_event_match": 0,
         "unsupported_period": 0,
         "no_pin_market": 0,
         "no_line_match": 0,
         "side_unresolved": 0,
         "team_total_side_missing": 0,
+        "prop_pin_scope": len(pin_prop_rows),
+        "prop_unmatched_reasons": {
+            "combo_stat_no_pinnacle": 0,
+            "no_team_anchor": 0,
+            "no_player_match": 0,
+            "no_line_match": 0,
+            "missing_stat": 0,
+        },
         "by_book": {},
     }
 
@@ -496,6 +588,77 @@ def match_all_markets(pin_rows, soft_markets):
         pin_info = event_to_pin.get((nm.book, sfx))
         if not pin_info:
             stats["no_event_match"] += 1
+            continue
+
+        # Player props route via a separate Pinnacle index keyed by
+        # (matchup_id, canonical_stat, player_key). They do not obey the
+        # period / pin_index lookup used by team markets, so handle here
+        # before the generic block.
+        if nm.market_type == "player_prop":
+            if nm.stat in COMBO_STATS:
+                stats["prop_unmatched_reasons"]["combo_stat_no_pinnacle"] += 1
+                continue
+            if nm.stat is None:
+                stats["prop_unmatched_reasons"]["missing_stat"] += 1
+                continue
+            if not nm.team:
+                stats["prop_unmatched_reasons"]["no_team_anchor"] += 1
+                continue
+            pkey = player_key(nm.player)
+            if not pkey:
+                stats["prop_unmatched_reasons"]["no_player_match"] += 1
+                continue
+            prop_rows = _pinnacle_prop_fuzzy_lookup(
+                prop_index, pin_info["matchup_id"], nm.stat, pkey
+            )
+            if not prop_rows:
+                stats["prop_unmatched_reasons"]["no_player_match"] += 1
+                continue
+            found = _find_prop_prices(prop_rows, nm.line)
+            if not found:
+                stats["prop_unmatched_reasons"]["no_line_match"] += 1
+                stats["no_line_match"] += 1
+                continue
+            pin_prop_row, over_price, under_price = found
+            pin_prop_matchup_id = pin_prop_row.get("prop_matchupId")
+            # Kalshi YES = player reaches N+ = Pinnacle Over N-0.5.
+            yes_price, opp_price = over_price, under_price
+            yes_designation, opposite_designation = "over", "under"
+            line_str = f"{nm.line:g}"
+            yes_label = f"{nm.player} Over {line_str} {nm.stat}"
+            opposite_label = f"{nm.player} Under {line_str} {nm.stat}"
+            selection = yes_label
+
+            non_ml_pairs.append(MatchedPair(
+                market=nm,
+                pin_matchup_id=pin_info["matchup_id"],
+                pin_matchup=pin_info["matchup"] or f"{pin_info['home']} vs {pin_info['away']}",
+                pin_home_name=pin_info["home"],
+                pin_away_name=pin_info["away"],
+                pin_start=pin_info["start"],
+                pin_sport=pin_info["sport"],
+                pin_is_live=pin_info["is_live"],
+                market_type="player_prop",
+                period_label="FULL",
+                line=nm.line,
+                yes_side_label=yes_label,
+                opposite_side_label=opposite_label,
+                yes_side_price=yes_price,
+                opposite_side_price=opp_price,
+                delta_seconds=pin_info["delta_seconds"],
+                selection=selection,
+                yes_designation=yes_designation,
+                opposite_designation=opposite_designation,
+                pin_prop_matchup_id=pin_prop_matchup_id,
+            ))
+            stats["matched_by_type"]["player_prop"] = stats["matched_by_type"].get("player_prop", 0) + 1
+            per_book = stats["by_book"].setdefault(
+                nm.book,
+                {"nonml_total": 0, "matched": 0,
+                 "matched_by_type": {"spread": 0, "total": 0, "team_total": 0, "player_prop": 0}},
+            )
+            per_book["matched"] += 1
+            per_book["matched_by_type"]["player_prop"] = per_book["matched_by_type"].get("player_prop", 0) + 1
             continue
 
         pin_period = PERIOD_LABEL_TO_INT.get(nm.period_label)

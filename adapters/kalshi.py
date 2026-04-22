@@ -15,7 +15,12 @@ import re
 
 import requests
 
-from .common import NormalizedMarket
+from .common import (
+    NormalizedMarket,
+    canonical_stat,
+    resolve_team_abbrev,
+    series_ticker_league,
+)
 
 BOOK = "kalshi"
 
@@ -35,6 +40,34 @@ TOTAL_SUFFIX = re.compile(r"TOTAL$")
 TEAMTOTAL_MARKER = "TEAMTOTAL"
 _KALSHI_HALF_RE = re.compile(r"([12])H(?=SPREAD|TOTAL)")
 _KALSHI_F5_MARKER = "F5"
+
+# Per-game player-prop series allowlist; mirrors kalshi_poller.PER_GAME_PROP_SERIES
+# so the adapter recognizes the exact tickers the poller ingests. Kept here (not
+# imported from the poller) so adapters don't depend on poller module state.
+PROP_SERIES = {
+    # NBA
+    "KXNBAPTS", "KXNBAREB", "KXNBAAST", "KXNBABLK", "KXNBASTL", "KXNBA3PT",
+    "KXNBAPRA", "KXNBAPR", "KXNBARA", "KXNBAPA",
+    # NHL
+    "KXNHLPTS", "KXNHLGOALS", "KXNHLSOG",
+    # NFL / MLB — ingested by poller but not matched yet (no Pinnacle prop
+    # coverage validated). Accepted here so we don't silently drop them.
+    "KXNFLPASSYDS", "KXNFLPASSTDS", "KXNFLRSHYDS", "KXNFLRECYDS",
+    "KXNFLREC", "KXNFLANYTD", "KXNFLNEXTTD",
+}
+
+# Stat portion of a prop series ticker: everything after "KX<sport>". Used to
+# pull the canonical stat key via common.canonical_stat().
+_PROP_SERIES_STAT_RE = re.compile(r"^KX(?:NBA|NHL|NFL|MLB)(?P<stat>.+)$")
+
+# "Sidney Crosby: 3+ points" -> ("Sidney Crosby", 3)
+_PROP_TITLE_RE = re.compile(
+    r"^(?P<player>[^:]+):\s*(?P<n>\d+(?:\.\d+)?)\+\s*\w+\s*$"
+)
+
+# "KXNBAREB-26APR22ORLDET-ORLWCARTER34-8": per-player segment is the third
+# hyphen-delimited chunk. Leading 3 chars are the player's team abbreviation.
+_PROP_TEAM_ABBREV_RE = re.compile(r"^[-]?(?P<abbr>[A-Z]{2,3})")
 
 MONTHS = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
           "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12}
@@ -222,6 +255,50 @@ def normalize_market(raw):
         # YES-side team resolution against Pinnacle happens in the matcher;
         # we just carry the raw yes_sub_title text for that stage.
         return _nm("moneyline", None, yes_sub.strip() or None, None)
+
+    if st in PROP_SERIES:
+        # Kalshi N+ threshold -> Pinnacle Over N-0.5. Player and N come from
+        # the title; team abbrev comes from the ticker's per-player segment.
+        m_title = _PROP_TITLE_RE.match(title)
+        if not m_title:
+            return None
+        try:
+            n = float(m_title.group("n"))
+        except ValueError:
+            return None
+        player = m_title.group("player").strip()
+        pin_line = n - 0.5
+
+        # Canonical stat from series suffix (more robust than the plural
+        # word in `title`; e.g. "threes" vs "3PT" vs "ThreePointersMade").
+        m_st = _PROP_SERIES_STAT_RE.match(st)
+        stat_canonical = canonical_stat(m_st.group("stat")) if m_st else None
+        if stat_canonical is None:
+            return None
+
+        # Team abbreviation: third hyphen-delimited chunk's leading 3 chars.
+        parts = ticker.split("-")
+        team_abbrev = parts[2][:3] if len(parts) >= 3 and len(parts[2]) >= 3 else None
+        league = series_ticker_league(st)
+        pin_team = resolve_team_abbrev(team_abbrev, league) if team_abbrev else None
+
+        nm = NormalizedMarket(
+            book=BOOK,
+            market_id=ticker,
+            event_id=event_id,
+            title=title,
+            yes_sub_title=yes_sub or None,
+            market_type="player_prop",
+            period_label="FULL",
+            line=pin_line,
+            team=pin_team,
+            side="over",  # Kalshi YES = over; matcher uses this to pick Pinnacle side
+            start_time=start_time,
+            raw=raw,
+            player=player,
+            stat=stat_canonical,
+        )
+        return nm
 
     return None
 

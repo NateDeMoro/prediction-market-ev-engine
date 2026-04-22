@@ -1,0 +1,19 @@
+[Unit]
+Description=Polymarket snapshot poller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=arb
+Group=arb
+WorkingDirectory=/home/arb/Arbitrage_Betting
+EnvironmentFile=/home/arb/Arbitrage_Betting/.env
+ExecStart=/usr/bin/python3 /home/arb/Arbitrage_Betting/polymarket_poller.py
+Restart=on-failure
+RestartSec=10s
+StandardOutput=append:/home/arb/Arbitrage_Betting/data/polymarket.stdout.log
+StandardError=append:/home/arb/Arbitrage_Betting/data/polymarket.stderr.log
+
+[Install]
+WantedBy=multi-user.target

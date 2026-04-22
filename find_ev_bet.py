@@ -34,6 +34,11 @@ MAX_SNAPSHOT_AGE_SEC = 300
 MIN_HOURS_TO_START = 0.5
 MAX_HOURS_TO_START = 3.0
 
+# Minimum edge gate for player props. Pinnacle's max-stake on props is $250
+# vs $7.5k+ on team markets, so prop quotes are noisier and we need a larger
+# edge before surfacing. Overridable at runtime.
+PROP_MIN_EDGE_PCT = float(os.getenv("PROP_MIN_EDGE", "4.0"))
+
 
 # ---------------------------------------------------------------------------
 # Price helpers (book-agnostic)
@@ -158,17 +163,21 @@ def find_matches(pin_rows, soft_markets):
         "matched_spread": nonml_stats["matched_by_type"].get("spread", 0),
         "matched_total": nonml_stats["matched_by_type"].get("total", 0),
         "matched_team_total": nonml_stats["matched_by_type"].get("team_total", 0),
+        "matched_player_prop": nonml_stats["matched_by_type"].get("player_prop", 0),
         "three_way_deferred": nonml_stats.get("moneyline_three_way_deferred", 0),
         "yes_side_unknown": nonml_stats.get("moneyline_yes_side_unresolved", 0),
         "team_total_side_missing": nonml_stats.get("team_total_side_missing", 0),
         "nonml_no_event_match": nonml_stats.get("no_event_match", 0),
         "nonml_no_pin_market": nonml_stats.get("no_pin_market", 0),
         "nonml_no_line_match": nonml_stats.get("no_line_match", 0),
+        "prop_unmatched_reasons": nonml_stats.get("prop_unmatched_reasons", {}),
+        "prop_pin_scope": nonml_stats.get("prop_pin_scope", 0),
         "already_started": 0,
         "outside_start_window": 0,
     }
     stats["matched"] = (stats["matched_moneyline"] + stats["matched_spread"]
-                        + stats["matched_total"] + stats["matched_team_total"])
+                        + stats["matched_total"] + stats["matched_team_total"]
+                        + stats["matched_player_prop"])
 
     now = datetime.now(timezone.utc)
     min_start = now + timedelta(hours=MIN_HOURS_TO_START)
@@ -218,6 +227,9 @@ def find_matches(pin_rows, soft_markets):
             "yes_pin_name": pair.yes_side_label,
             "yes_soft_name": nm.yes_sub_title or (nm.team or ""),
             "in_window": in_window,
+            "player": nm.player,
+            "stat": nm.stat,
+            "pin_prop_matchup_id": pair.pin_prop_matchup_id,
         })
 
     return candidates, stats
@@ -279,6 +291,10 @@ def main():
             near_misses.append((ev, c, best_ask, best_qty))
             continue
         ev_pct = exp_profit / stake * 100 if stake > 0 else 0
+        # Props carry a higher min-edge gate (Pinnacle prop max-stake is ~$250
+        # vs ~$7.5k+ for team markets — noisier quotes need a bigger cushion).
+        if c["market_type"] == "player_prop" and ev_pct < PROP_MIN_EDGE_PCT:
+            continue
         results.append({
             **c, "shares": shares, "stake": stake,
             "expected_profit": exp_profit, "ev_pct": ev_pct,
