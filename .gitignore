@@ -1,0 +1,37 @@
+# Credentials / secrets
+.env
+.env.local
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
+# Runtime data (snapshots, logs, pids, local caches)
+data/snapshots/
+data/kalshi_snapshots/
+data/polymarket_snapshots/
+data/polymarket_probe/
+data/*.log
+data/*.pid
+data/stdout.log
+data/dashboard.log
+data/_baseline_*
+data/_refactor_*
+data/match_report.json
+data/paper_trades.jsonl
+data/paper_settlements.jsonl
+data/paper_closes.jsonl
+state.json
+
+# Editors
+.idea/
+.vscode/
+*.swp

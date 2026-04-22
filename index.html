@@ -1,0 +1,1943 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AZ Sportsbook Promo Dashboard</title>
+<style>
+  :root {
+    --bg: #0f1419;
+    --bg-elev: #161c23;
+    --bg-card: #1a2029;
+    --border: #2a323d;
+    --text: #d8dee4;
+    --text-dim: #8b95a1;
+    --text-bright: #ffffff;
+    --accent: #4a9eff;
+    --green: #3fb950;
+    --yellow: #d29922;
+    --blue: #4a9eff;
+    --gray: #6e7681;
+    --red: #f85149;
+    --mono: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  header {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: var(--bg-elev);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 32px;
+  }
+
+  header h1 {
+    margin: 0 0 8px;
+    font-size: 18px;
+    color: var(--text-bright);
+  }
+
+  .summary-bar {
+    display: flex;
+    gap: 24px;
+    font-size: 13px;
+    color: var(--text-dim);
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .summary-bar label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .summary-bar input {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    color: var(--text-bright);
+    padding: 4px 8px;
+    width: 80px;
+    font-family: var(--mono);
+    font-size: 13px;
+    border-radius: 3px;
+  }
+
+  .nav {
+    display: flex;
+    gap: 12px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+  }
+
+  .nav a {
+    color: var(--text-dim);
+    text-decoration: none;
+    font-size: 12px;
+    padding: 2px 6px;
+    border-radius: 3px;
+  }
+
+  .nav a:hover {
+    color: var(--text-bright);
+    background: var(--bg-card);
+  }
+
+  main {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 24px 32px;
+  }
+
+  .book {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--gray);
+    border-radius: 6px;
+    margin-bottom: 24px;
+    overflow: hidden;
+  }
+
+  .book.status-complete { border-left-color: var(--green); }
+  .book.status-in-progress { border-left-color: var(--yellow); }
+  .book.status-verified { border-left-color: var(--blue); }
+  .book.status-not-started { border-left-color: var(--gray); }
+  .book.status-blocked { border-left-color: var(--red); }
+
+  .book-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-elev);
+  }
+
+  .book-title {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+  }
+
+  .book-name {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-bright);
+  }
+
+  .book-offer {
+    color: var(--text-dim);
+    font-size: 13px;
+  }
+
+  .status-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 4px 10px;
+    font-size: 11px;
+    border-radius: 3px;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-family: inherit;
+  }
+
+  .status-btn:hover {
+    background: var(--bg);
+  }
+
+  .status-btn.status-complete { color: var(--green); border-color: var(--green); }
+  .status-btn.status-in-progress { color: var(--yellow); border-color: var(--yellow); }
+  .status-btn.status-verified { color: var(--blue); border-color: var(--blue); }
+  .status-btn.status-not-started { color: var(--gray); border-color: var(--gray); }
+  .status-btn.status-blocked { color: var(--red); border-color: var(--red); }
+
+  .book-body {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1.2fr;
+    gap: 1px;
+    background: var(--border);
+  }
+
+  .block {
+    background: var(--bg-card);
+    padding: 16px 20px;
+  }
+
+  .block h3 {
+    margin: 0 0 10px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-dim);
+    font-weight: 600;
+  }
+
+  .block ul {
+    margin: 0;
+    padding-left: 18px;
+    font-size: 13px;
+  }
+
+  .block ul li { margin-bottom: 4px; }
+
+  .stat {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 0;
+    border-bottom: 1px dashed var(--border);
+    font-size: 13px;
+  }
+
+  .stat:last-child { border-bottom: none; }
+
+  .stat-label { color: var(--text-dim); }
+
+  .stat-value {
+    font-family: var(--mono);
+    color: var(--text-bright);
+    font-weight: 500;
+  }
+
+  .stat-value.good { color: var(--green); }
+  .stat-value.bad { color: var(--red); }
+  .stat-value.warn { color: var(--yellow); }
+
+  .calc-inputs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 12px;
+    margin-bottom: 12px;
+  }
+
+  .calc-inputs label {
+    display: flex;
+    flex-direction: column;
+    font-size: 11px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .calc-inputs input {
+    margin-top: 4px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text-bright);
+    padding: 6px 8px;
+    font-family: var(--mono);
+    font-size: 13px;
+    border-radius: 3px;
+  }
+
+  .calc-inputs input:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+
+  .calc-outputs {
+    background: var(--bg);
+    border-radius: 4px;
+    padding: 10px 12px;
+    margin-top: 8px;
+  }
+
+  .calc-note {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--border);
+  }
+
+  .calc-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .calc-mode-toggle {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .calc-mode-toggle button {
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    padding: 4px 10px;
+    font-size: 11px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .calc-mode-toggle button.active {
+    background: var(--accent);
+    color: #000;
+  }
+  .calc-mode-toggle button:not(.active):hover {
+    color: var(--text);
+  }
+
+  .promo-meta {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 4px 12px;
+    font-size: 13px;
+    margin-bottom: 10px;
+  }
+
+  .promo-meta dt { color: var(--text-dim); }
+  .promo-meta dd { margin: 0; font-family: var(--mono); color: var(--text-bright); }
+
+  .gotcha {
+    background: rgba(210, 153, 34, 0.08);
+    border-left: 2px solid var(--yellow);
+    padding: 8px 10px;
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--text);
+  }
+
+  .gotcha strong { color: var(--yellow); }
+
+  @media (max-width: 1100px) {
+    .book-body { grid-template-columns: 1fr; }
+  }
+
+  /* Tracker */
+  .tracker {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 16px 32px 0;
+  }
+
+  .tracker-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+
+  .tracker-title {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-dim);
+    font-weight: 600;
+  }
+
+  .tracker-toggle {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    padding: 4px 10px;
+    font-size: 11px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+
+  .tracker-toggle:hover { color: var(--text-bright); }
+
+  .tracker-body { overflow-x: auto; }
+
+  .tracker-body.collapsed { display: none; }
+
+  .tracker-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+
+  .tracker-table th {
+    text-align: left;
+    padding: 8px 10px;
+    color: var(--text-dim);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+  }
+
+  .tracker-table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+  }
+
+  .tracker-table tr.settled-won { background: rgba(63, 185, 80, 0.05); }
+  .tracker-table tr.settled-lost { background: rgba(248, 81, 73, 0.05); }
+  .tracker-table tr.settled-pushed,
+  .tracker-table tr.settled-voided { background: rgba(210, 153, 34, 0.05); }
+
+  .tracker-table td.mono {
+    font-family: var(--mono);
+    color: var(--text-bright);
+  }
+
+  .tracker-table input,
+  .tracker-table select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 3px 6px;
+    border-radius: 3px;
+    font-family: inherit;
+    font-size: 12px;
+  }
+
+  .tracker-table input.desc { width: 180px; }
+  .tracker-table input.num { width: 80px; font-family: var(--mono); text-align: right; }
+  .tracker-table input.resolves { width: 165px; font-family: var(--mono); font-size: 12px; }
+  .tracker-table .resolves-hint { font-size: 11px; margin-top: 2px; font-family: var(--mono); }
+  .tracker-table .resolves-hint.dim { color: var(--text-dim); }
+  .tracker-table .resolves-hint.warn { color: var(--yellow); }
+  .tracker-table .resolves-hint.bad { color: var(--red); }
+
+  .tab-bar {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 16px 32px 0;
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid var(--border);
+  }
+  .tab-btn {
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--text-dim);
+    padding: 10px 18px;
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    margin-bottom: -1px;
+  }
+  .tab-btn:hover { color: var(--text); }
+  .tab-btn.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+  .view.hidden { display: none; }
+
+  .checklist-wrap {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 24px 32px 64px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+    gap: 16px;
+  }
+  .checklist-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px 18px;
+  }
+  .checklist-card.blocked { opacity: 0.45; }
+  .checklist-card h3 {
+    margin: 0 0 4px;
+    font-size: 15px;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+  .checklist-card .cl-progress {
+    font-size: 11px;
+    color: var(--text-dim);
+    font-family: var(--mono);
+    font-weight: normal;
+  }
+  .checklist-card .cl-sub {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-bottom: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .cl-item {
+    display: flex;
+    align-items: flex-start;
+    padding: 6px 0;
+    gap: 10px;
+    font-size: 13px;
+    line-height: 1.4;
+  }
+  .cl-item input[type="checkbox"] {
+    margin-top: 2px;
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
+  .cl-item.done label { color: var(--text-dim); text-decoration: line-through; }
+  .cl-section-label {
+    font-size: 10px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    margin-top: 12px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--border);
+  }
+  .cl-outcome {
+    display: flex;
+    gap: 6px;
+    margin: 10px 0 6px;
+  }
+  .cl-outcome button {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 4px 10px;
+    font-size: 11px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .cl-outcome button:hover { border-color: var(--text-dim); }
+  .cl-outcome button.active-won { background: var(--green); color: #000; border-color: var(--green); }
+  .cl-outcome button.active-lost { background: var(--red); color: #fff; border-color: var(--red); }
+  .cl-outcome button.active-pending { background: var(--yellow); color: #000; border-color: var(--yellow); }
+  .cl-branch-note {
+    font-size: 11px;
+    color: var(--text-dim);
+    font-style: italic;
+    padding: 4px 0;
+  }
+
+  .tracker-empty {
+    padding: 20px;
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 13px;
+  }
+
+  .icon-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 2px 6px;
+  }
+
+  .icon-btn:hover { color: var(--red); }
+
+  .track-btn {
+    background: var(--accent);
+    color: var(--bg);
+    border: none;
+    padding: 6px 12px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    margin-top: 10px;
+    font-family: inherit;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .track-btn:hover { opacity: 0.9; }
+  .track-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .summary-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .summary-stat-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-dim);
+  }
+
+  .summary-stat-value {
+    font-family: var(--mono);
+    font-size: 15px;
+    color: var(--text-bright);
+    font-weight: 500;
+  }
+
+  .summary-stat-value.good { color: var(--green); }
+  .summary-stat-value.warn { color: var(--yellow); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>AZ Sportsbook Promo Dashboard — Phase 1 Matched Betting <span id="syncStatus" style="font-size:12px;font-weight:normal;margin-left:12px;color:var(--text-dim)">● local only</span></h1>
+  <div class="summary-bar">
+    <label>Deposited: $<input type="number" id="totalDeposited" placeholder="0" step="1"></label>
+    <div class="summary-stat"><span class="summary-stat-label">Active Bets</span><span class="summary-stat-value" id="sumActive">0</span></div>
+    <div class="summary-stat"><span class="summary-stat-label">Pending Locked-In</span><span class="summary-stat-value warn" id="sumPending">$0</span></div>
+    <div class="summary-stat"><span class="summary-stat-label">Realized Profit</span><span class="summary-stat-value good" id="sumRealized">$0</span></div>
+    <div class="summary-stat"><span class="summary-stat-label">Pipeline Remaining</span><span class="summary-stat-value" id="pipelineRemaining">—</span></div>
+  </div>
+  <nav class="nav" id="bookNav"></nav>
+</header>
+
+<div class="tab-bar">
+  <button class="tab-btn active" data-view="dashboard">Dashboard</button>
+  <button class="tab-btn" data-view="checklist">Checklist</button>
+</div>
+
+<div id="dashboardView" class="view">
+  <section class="tracker">
+    <div class="tracker-header">
+      <span class="tracker-title">Bet Tracker</span>
+      <button class="tracker-toggle" id="trackerToggle">Hide</button>
+    </div>
+    <div class="tracker-body" id="trackerBody"></div>
+  </section>
+
+  <main id="books"></main>
+</div>
+
+<div id="checklistView" class="view hidden">
+  <div class="checklist-wrap" id="checklistWrap"></div>
+</div>
+
+<script>
+// =========================================================================
+// BOOK DATA
+// =========================================================================
+const BOOKS = [
+  {
+    id: 'betmgm',
+    name: 'BetMGM',
+    offer: 'First Bet Refund up to $1,500',
+    defaultStatus: 'not-started',
+    meta: {
+      'Max Nominal': '$1,500',
+      'Est Net EV': '~$525 locked-in',
+      'Min Odds': '−200 or longer (typical)',
+      'Token Structure': 'Single bonus bet on loss',
+      'Expires': '7 days from issuance'
+    },
+    strategy: [
+      'Classification: First-bet insurance (single token on loss).',
+      'Place full $1,500 at decimal ~2.0 (−110 to +110) on Team A.',
+      'Hedge at another book on Team B at similar decimal ~2.0.',
+      'If BetMGM wins → promo burns, ~break-even on qualifying bet.',
+      'If BetMGM loses → receive single $1,500 SNR bonus bet. Convert at decimal 3.0–4.0 with further hedge.',
+      'Capital required: ~$1,500 at BetMGM + ~$1,500 hedge cash. Heavy capital.'
+    ],
+    gotchas: [
+      'Single token is not splittable inside the book — use Type A calculator with one $1,500 bonus, target decimal 3.0–4.0.',
+      'Qualifying bet voids (pushes) may not trigger refund — stick to MLB/NBA/NHL moneylines with no push risk.'
+    ],
+    calcType: 'C',
+    calcDefaults: { stake: 1500, amA: 100, amB: 100, refundPct: 100, tokens: 1, conv: 70 }
+  },
+  {
+    id: 'thescore',
+    name: 'theScore Bet',
+    offer: 'Bet Reset up to $1,000 (5× 20% tokens)',
+    defaultStatus: 'not-started',
+    meta: {
+      'Max Nominal': '$1,000',
+      'Est Net EV': '~$350 locked-in',
+      'Min Odds': 'Confirm in app',
+      'Token Structure': '5 SNR bonus bets, each 20% of losing stake',
+      'Expires': '7 days from issuance',
+      'Promo Code': 'DIME / BETAZ / GOAL (affiliate codes, not required)'
+    },
+    strategy: [
+      'Classification: First-bet insurance (multi-token on loss).',
+      'Place up to $1,000 at decimal ~2.0 on Team A. Hedge at decimal ~2.0 at another book.',
+      'If theScore wins → promo burns, ~break-even.',
+      'If theScore loses → receive 5× $200 SNR tokens. Convert each sequentially at decimal 3.0–4.0.',
+      'Multi-token structure means you can cycle hedge capital between conversions.',
+      'Previous ESPN BET accounts may block signup — rebrand Dec 2025.'
+    ],
+    gotchas: [
+      'Past Penn Sports Interactive / ESPN BET account → no eligibility.',
+      'Do NOT use as hedge for another book\'s bonus — burns the promo slot at low trigger rate.'
+    ],
+    calcType: 'C',
+    calcDefaults: { stake: 1000, amA: 100, amB: 100, refundPct: 100, tokens: 5, conv: 70 }
+  },
+  {
+    id: 'fanatics',
+    name: 'Fanatics',
+    offer: '10× $100 Daily Bet Match (FanCash)',
+    defaultStatus: 'in-progress',
+    meta: {
+      'Max Nominal': '$1,000 over 10 days',
+      'Est Net EV': '~$710 locked-in',
+      'Min Odds': '−200 or longer (check T&Cs)',
+      'Token Structure': '$100 FanCash per day, 10 consecutive days',
+      'FanCash Behavior': 'Near-cash (80–90% conversion)'
+    },
+    strategy: [
+      'Classification: Bet-match (win or lose).',
+      'Each day: place up to $100 cash at decimal ~2.0 (−110 to +110).',
+      'Hedge at another book on opposite outcome at decimal ~2.0.',
+      'FanCash credits ~24h later; bet FanCash at decimal 2.0–3.0 with further hedge.',
+      'Missing a day loses only that day\'s match (not the whole promo). Set daily reminder.',
+      'Bets at heavy favorite odds (e.g., −245) may receive reduced match — confirm min-odds rule in T&Cs.'
+    ],
+    gotchas: [
+      'FanCash ≠ SNR bonus. When bet with FanCash, stake-equivalent returns — higher conversion than typical bonus bet.',
+      'Place daily bet at minimum qualifying odds or longer (decimal ≥ 1.91). Heavier favorites may reduce match.'
+    ],
+    calcType: 'B',
+    calcDefaults: { stake: 100, amA: -110, amB: -110 }
+  },
+  {
+    id: 'fanduel',
+    name: 'FanDuel',
+    offer: 'Bet $5, Get $250 Bonus Bets if Win',
+    defaultStatus: 'in-progress',
+    meta: {
+      'Max Nominal': '$250',
+      'Est Net EV': '~$199 locked-in',
+      'Min Odds (Qual)': 'None — any odds',
+      'Token Structure': 'Varies — single $250 or split tokens',
+      'Expires': '7 days after issuance'
+    },
+    strategy: [
+      'Classification: Bet-and-get if qualifying wins (SNR bonus).',
+      'Qualifying bet: $5 on heaviest available favorite (−10000+ acceptable; no min-odds rule). ~99%+ trigger.',
+      'Do NOT hedge qualifying bet — you want FD to win to unlock bonus.',
+      'Once $250 bonus lands, convert at decimal 3.0–4.0 at FD, hedged at Caesars or another book.',
+      'If tokens are split (e.g., 5× $50), convert sequentially to recycle hedge capital.'
+    ],
+    gotchas: [
+      'Screenshot qualifying bet slip in case of grading dispute.',
+      'Bonus bets are SNR — only profit returns, stake does not.'
+    ],
+    calcType: 'A',
+    calcDefaults: { bonus: 250, amA: 300, amB: -278 }
+  },
+  {
+    id: 'draftkings',
+    name: 'DraftKings',
+    offer: 'Bet $5, Get $300 Bonus Bets (12× $25) if Win',
+    defaultStatus: 'verified',
+    meta: {
+      'Max Nominal': '$300',
+      'Est Net EV': '~$238 locked-in',
+      'Min Odds (Qual)': '−200 or longer (verify in-app)',
+      'Token Structure': '12× $25 SNR tokens',
+      'Expires': '7 days after issuance'
+    },
+    strategy: [
+      'Classification: Bet-and-get if qualifying wins (SNR bonus, multi-token).',
+      'Qualifying bet: $5 at min-odds floor (~−200 / decimal 1.50) to max trigger probability.',
+      'Do NOT hedge qualifying bet — want DK to win.',
+      '12 tokens × $25 = ideal for sequential conversion with small hedge capital per token.',
+      'Each token: decimal 3.0–4.0 at DK, hedge at FanDuel or another book.',
+      'Clever double-dip: DK\'s $5 qualifying bet can double as the HEDGE for FD\'s $250 bonus conversion.'
+    ],
+    gotchas: [
+      'Parlays may not qualify as first bet — use single-leg moneyline.',
+      'Per-token hedge capital ~$50–65 at decimal 3.0–4.0.'
+    ],
+    calcType: 'A',
+    calcDefaults: { bonus: 25, amA: 300, amB: -278 }
+  },
+  {
+    id: 'bet365',
+    name: 'bet365',
+    offer: 'Bet $10, Get $365 Bonus Bets (Win or Lose)',
+    defaultStatus: 'blocked',
+    meta: {
+      'Max Nominal': '$365',
+      'Est Net EV': '~$255 locked-in (blocked)',
+      'Min Odds (Qual)': 'None',
+      'Token Structure': 'Typically single $365 token',
+      'Status for User': 'BLOCKED — prior account lockout'
+    },
+    strategy: [
+      'Classification: Bet-and-get win-or-lose (guaranteed trigger).',
+      'Place $10 at any odds on any market. $365 bonus credits regardless.',
+      'Convert $365 at decimal 3.0–4.0 at bet365, hedge at another book.',
+      'Single token — no sequential cycling possible. Capital required ~$450 hedge if decimal 4.0.',
+      'Promo-code-free — select "$365 Win or Lose" option at signup (NOT $1,000 safety net).'
+    ],
+    gotchas: [
+      'User is locked out of bet365 (prior underage attempt). Skip this book for now.',
+      'If reactivated: win-or-lose structure is the cleanest signup math in AZ.'
+    ],
+    calcType: 'E',
+    calcDefaults: { qualStake: 10, bonus: 365, amA: 300, amB: -278 }
+  },
+  {
+    id: 'betrivers',
+    name: 'BetRivers',
+    offer: '2nd Chance Bet up to $100 (AZ)',
+    defaultStatus: 'not-started',
+    meta: {
+      'Max Nominal': '$100',
+      'Est Net EV': '~$35 locked-in',
+      'Min Odds': '−200 or longer (verify)',
+      'Token Structure': 'Single bonus bet on loss (refunds stake up to $100)',
+      'Expires': '30 days (more generous than most)'
+    },
+    strategy: [
+      'Classification: First-bet insurance (single token), capped at $100.',
+      'Place $100 at decimal ~2.0. Hedge ~$65 at another book.',
+      'If BetRivers loses → single $100 SNR token. Convert at decimal 3.0–4.0 hedged.',
+      'Capital required: ~$100 at BetRivers + ~$65 hedge cash.',
+      'Lowest EV of the AZ signup set but also smallest capital lift — run it early to clear the account.'
+    ],
+    gotchas: [
+      '30-day expiration gives flexibility — don\'t rush conversion if markets are unfavorable.',
+      'AZ offer is only $100 matched, not $500 — don\'t over-deposit.'
+    ],
+    calcType: 'C',
+    calcDefaults: { stake: 100, amA: 100, amB: 100, refundPct: 100, tokens: 1, conv: 70 }
+  },
+  {
+    id: 'caesars',
+    name: 'Caesars',
+    offer: '10× 100% Profit Boost Tokens ($25 max stake)',
+    defaultStatus: 'verified',
+    meta: {
+      'Max Nominal': '~$250 in boost face',
+      'Est Net EV': '~$213 locked-in',
+      'Min Odds (Boost)': '+100 (decimal 2.0) typical',
+      'Token Structure': '10× 100% profit boost, $25 max stake each',
+      'Expires': '7 days per token'
+    },
+    strategy: [
+      'Classification: Profit boost (doubles profit portion, stake unchanged).',
+      'Effective boosted decimal = 1 + (decA − 1) × 2. At +300, boosted = 7.0.',
+      'Target odds: decimal 3.0–4.0 (+200 to +300). Higher odds extract more boost value.',
+      'Execute sequentially — peak hedge capital is 1 token (~$130), not 10.',
+      'Apply boost on bet slip before confirming. Boosts don\'t stack.',
+      'Also viable as hedge venue for FD $250 conversion (Caesars signup EV is low enough to burn).'
+    ],
+    gotchas: [
+      'Parlays/futures typically ineligible for boost.',
+      'Push/void may consume the token — stick to moneylines.',
+      'Enter Caesars promo code (e.g., COVERSBONUSDYW) at signup to attach the correct offer.'
+    ],
+    calcType: 'D',
+    calcDefaults: { stake: 25, boost: 100, amA: 300, amB: -278 }
+  },
+  {
+    id: 'hardrock',
+    name: 'Hard Rock Bet',
+    offer: '10× 100% Profit Boost Tokens',
+    defaultStatus: 'not-started',
+    meta: {
+      'Max Nominal': '~$500 in boost face',
+      'Est Net EV': '~$427 locked-in',
+      'Min Odds (Boost)': '+100 typical',
+      'Token Structure': '10× 100% profit boosts, $50 max stake each',
+      'Expires': '7 days per token'
+    },
+    strategy: [
+      'Classification: Profit boost (same mechanic as Caesars but larger $50 cap).',
+      'Effective boosted decimal = 1 + (decA − 1) × 2. At +300, boosted = 7.0.',
+      'Target odds: decimal 3.0–4.0 (+200 to +300). Higher odds extract more boost value.',
+      'Execute sequentially — peak hedge capital is 1 token (~$260), not 10.',
+      'Higher per-token cap than Caesars makes this the second-best boost promo after it.'
+    ],
+    gotchas: [
+      'Per-token cap is $50 (higher than Caesars $25) — size bets accordingly.',
+      'Hard Rock limits sharp activity faster than Caesars — run tokens quickly after signup.'
+    ],
+    calcType: 'D',
+    calcDefaults: { stake: 50, boost: 100, amA: 300, amB: -278 }
+  },
+  {
+    id: 'desertdiamond',
+    name: 'Desert Diamond',
+    offer: '$250 Welcome Match (Bonus Bets, Win or Lose)',
+    defaultStatus: 'not-started',
+    meta: {
+      'Max Nominal': '$250',
+      'Est Net EV': '~$175 locked-in',
+      'Qualifying Wager': '$250 — bonus triggers win or lose',
+      'Bonus Bet Min Odds': '−200 or longer',
+      'Token Structure': '$250 in SNR bonus bets (guaranteed)'
+    },
+    strategy: [
+      'Classification: Bet-and-get win-or-lose (guaranteed trigger).',
+      'Step 1: Place $250 qualifying bet at decimal ~2.0 and hedge normally at another book — minimize vig loss on the qualifying leg.',
+      'Step 2: Once $250 SNR bonus credits, convert at decimal 3.0–4.0 (min odds −200 or longer), hedged at another book.',
+      'SNR conversion realistic range: ~70–75% after Kalshi fees and hedge vig → ~$175–$190 expected value.',
+      'Min-odds restriction (−200 or longer) is favorable — does not cap SNR conversion upside.'
+    ],
+    gotchas: [
+      'Qualifying $250 should be hedged for minimum-vig arb since the bonus lands regardless — do not leave the $250 naked.',
+      'Confirm bonus bets post quickly (often within 24h of qualifying settlement) before starting the conversion cycle.'
+    ],
+    calcType: 'B',
+    calcDefaults: { stake: 250, amA: -110, amB: -110 }
+  }
+];
+
+const STATUSES = ['not-started', 'verified', 'in-progress', 'complete', 'blocked'];
+const STATUS_LABELS = {
+  'not-started': 'Not Started',
+  'verified': 'Verified',
+  'in-progress': 'In Progress',
+  'complete': 'Complete',
+  'blocked': 'Blocked'
+};
+
+// =========================================================================
+// CALCULATOR RENDERERS
+// =========================================================================
+
+function fmt(n, digits = 2) {
+  if (!isFinite(n)) return '—';
+  return n.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+
+function impliedProb(dec) {
+  return dec > 1 ? 1 / dec : 0;
+}
+
+function americanToDecimal(am) {
+  if (!isFinite(am) || am === 0) return 0;
+  if (am >= 100) return (am / 100) + 1;
+  if (am <= -100) return (100 / Math.abs(am)) + 1;
+  return 0;
+}
+
+function fmtAmerican(am) {
+  if (!isFinite(am) || am === 0) return '—';
+  return am > 0 ? '+' + am : String(am);
+}
+
+function calcA(vals, outputEl) {
+  // SNR Bonus Conversion
+  const { bonus, amA, amB } = vals;
+  const decA = americanToDecimal(amA);
+  const decB = americanToDecimal(amB);
+  if (bonus <= 0 || decA <= 1 || decB <= 1) {
+    outputEl.innerHTML = '<div class="stat"><span class="stat-label">Invalid inputs (American odds must be ≥ +100 or ≤ −100)</span></div>';
+    return;
+  }
+  const hedge = (bonus * (decA - 1)) / decB;
+  const lockedIn = bonus * (decA - 1) - hedge;
+  const conversion = (lockedIn / bonus) * 100;
+  const combinedProb = (impliedProb(decA) + impliedProb(decB)) * 100;
+  const vig = combinedProb - 100;
+
+  outputEl.innerHTML = `
+    <div class="stat"><span class="stat-label">Decimal (A / B)</span><span class="stat-value">${fmt(decA, 3)} / ${fmt(decB, 3)}</span></div>
+    <div class="stat"><span class="stat-label">Hedge stake (Book B)</span><span class="stat-value">$${fmt(hedge)}</span></div>
+    <div class="stat"><span class="stat-label">Locked-in profit</span><span class="stat-value good">$${fmt(lockedIn)}</span></div>
+    <div class="stat"><span class="stat-label">Conversion rate</span><span class="stat-value ${conversion >= 70 ? 'good' : conversion >= 60 ? 'warn' : 'bad'}">${fmt(conversion, 1)}%</span></div>
+    <div class="stat"><span class="stat-label">Combined implied prob</span><span class="stat-value ${vig <= 3 ? 'good' : vig <= 6 ? 'warn' : 'bad'}">${fmt(combinedProb, 1)}%</span></div>
+    <div class="stat"><span class="stat-label">Vig</span><span class="stat-value ${vig <= 3 ? 'good' : vig <= 6 ? 'warn' : 'bad'}">${fmt(vig, 2)}%</span></div>
+  `;
+  return { stakeA: bonus, hedgeStake: hedge, expectedProfit: lockedIn, stakeType: 'Bonus Bet', amA, amB };
+}
+
+function calcB(vals, outputEl) {
+  // Cash Qualifying Bet Hedge
+  const { stake, amA, amB } = vals;
+  const decA = americanToDecimal(amA);
+  const decB = americanToDecimal(amB);
+  if (stake <= 0 || decA <= 1 || decB <= 1) {
+    outputEl.innerHTML = '<div class="stat"><span class="stat-label">Invalid inputs (American odds must be ≥ +100 or ≤ −100)</span></div>';
+    return;
+  }
+  const hedge = (stake * decA) / decB;
+  const costA = stake * (decA - 1) - hedge;
+  const costB = hedge * (decB - 1) - stake;
+  const combinedProb = (impliedProb(decA) + impliedProb(decB)) * 100;
+  const vig = combinedProb - 100;
+
+  outputEl.innerHTML = `
+    <div class="stat"><span class="stat-label">Decimal (A / B)</span><span class="stat-value">${fmt(decA, 3)} / ${fmt(decB, 3)}</span></div>
+    <div class="stat"><span class="stat-label">Hedge stake (Book B)</span><span class="stat-value">$${fmt(hedge)}</span></div>
+    <div class="stat"><span class="stat-label">Net if Team A wins</span><span class="stat-value ${costA >= 0 ? 'good' : 'bad'}">$${fmt(costA)}</span></div>
+    <div class="stat"><span class="stat-label">Net if Team B wins</span><span class="stat-value ${costB >= 0 ? 'good' : 'bad'}">$${fmt(costB)}</span></div>
+    <div class="stat"><span class="stat-label">Qualifying cost (avg)</span><span class="stat-value ${(costA + costB)/2 >= -5 ? 'good' : 'warn'}">$${fmt((costA + costB) / 2)}</span></div>
+    <div class="stat"><span class="stat-label">Vig</span><span class="stat-value ${vig <= 3 ? 'good' : vig <= 6 ? 'warn' : 'bad'}">${fmt(vig, 2)}%</span></div>
+  `;
+  return { stakeA: stake, hedgeStake: hedge, expectedProfit: (costA + costB) / 2, stakeType: 'Cash', amA, amB };
+}
+
+function calcC(vals, outputEl) {
+  // First-Bet Insurance / Reset — BALANCED HEDGE
+  const { stake, amA, amB, refundPct, tokens, conv } = vals;
+  const decA = americanToDecimal(amA);
+  const decB = americanToDecimal(amB);
+  if (stake <= 0 || decA <= 1 || decB <= 1 || refundPct < 0 || tokens < 1 || conv < 0) {
+    outputEl.innerHTML = '<div class="stat"><span class="stat-label">Invalid inputs (American odds must be ≥ +100 or ≤ −100)</span></div>';
+    return;
+  }
+  const totalRefund = stake * (refundPct / 100);
+  const bonusConvertedValue = totalRefund * (conv / 100); // V — expected bonus value at assumed conv%
+  // Balanced hedge: shifts hedge stake down so both outcomes net the same EV.
+  // H = (stake * decA − V) / decB
+  const hedge = (stake * decA - bonusConvertedValue) / decB;
+  const lockedIn = stake * (decA - 1) - hedge; // equal on both sides by construction
+  const cashIfAWins = stake * (decA - 1) - hedge; // same as lockedIn
+  const cashIfBWins = hedge * (decB - 1) - stake; // pre-bonus (will be negative)
+  const netIfBLosesWithBonus = cashIfBWins + bonusConvertedValue; // = lockedIn
+  const standardHedge = (stake * decA) / decB;
+  const probA = impliedProb(decA);
+  const probB = impliedProb(decB);
+  const combinedProb = (probA + probB) * 100;
+  const vig = combinedProb - 100;
+
+  outputEl.innerHTML = `
+    <div class="stat"><span class="stat-label">Decimal (A / B)</span><span class="stat-value">${fmt(decA, 3)} / ${fmt(decB, 3)}</span></div>
+    <div class="stat"><span class="stat-label">Balanced hedge stake (Book B)</span><span class="stat-value">$${fmt(hedge)}</span></div>
+    <div class="stat"><span class="stat-label">Locked-in profit (either outcome)</span><span class="stat-value ${lockedIn >= 200 ? 'good' : lockedIn >= 50 ? 'warn' : 'bad'}">$${fmt(lockedIn)}</span></div>
+    <div class="stat"><span class="stat-label">If Book A wins (promo burns)</span><span class="stat-value ${cashIfAWins >= 0 ? 'good' : 'bad'}">$${fmt(cashIfAWins)}</span></div>
+    <div class="stat"><span class="stat-label">If Book A loses — cash leg</span><span class="stat-value bad">$${fmt(cashIfBWins)}</span></div>
+    <div class="stat"><span class="stat-label">+ Bonus converted (${tokens} × $${fmt(totalRefund/tokens)} @ ${conv}%)</span><span class="stat-value good">$${fmt(bonusConvertedValue)}</span></div>
+    <div class="stat"><span class="stat-label">Net if Book A loses</span><span class="stat-value good">$${fmt(netIfBLosesWithBonus)}</span></div>
+    <div class="stat"><span class="stat-label">(Unbalanced hedge would be)</span><span class="stat-value">$${fmt(standardHedge)}</span></div>
+    <div class="stat"><span class="stat-label">Vig</span><span class="stat-value ${vig <= 3 ? 'good' : vig <= 6 ? 'warn' : 'bad'}">${fmt(vig, 2)}%</span></div>
+  `;
+  return { stakeA: stake, hedgeStake: hedge, expectedProfit: lockedIn, stakeType: 'Cash (balanced)', amA, amB };
+}
+
+function calcD(vals, outputEl) {
+  // Profit Boost Token
+  const { stake, boost, amA, amB } = vals;
+  const decA = americanToDecimal(amA);
+  const decB = americanToDecimal(amB);
+  if (stake <= 0 || boost < 0 || decA <= 1 || decB <= 1) {
+    outputEl.innerHTML = '<div class="stat"><span class="stat-label">Invalid inputs (American odds must be ≥ +100 or ≤ −100)</span></div>';
+    return;
+  }
+  const boostedDec = 1 + (decA - 1) * (1 + boost / 100);
+  const hedge = (stake * boostedDec) / decB;
+  const lockedIn = stake * (boostedDec - 1) - hedge;
+  const tenTokenTotal = lockedIn * 10;
+  const hedgePerToken = hedge;
+  const combinedProb = (impliedProb(decA) + impliedProb(decB)) * 100;
+  const vig = combinedProb - 100;
+
+  outputEl.innerHTML = `
+    <div class="stat"><span class="stat-label">Decimal (A / B)</span><span class="stat-value">${fmt(decA, 3)} / ${fmt(decB, 3)}</span></div>
+    <div class="stat"><span class="stat-label">Boosted decimal odds</span><span class="stat-value">${fmt(boostedDec, 3)}</span></div>
+    <div class="stat"><span class="stat-label">Hedge stake per token</span><span class="stat-value">$${fmt(hedgePerToken)}</span></div>
+    <div class="stat"><span class="stat-label">Locked-in per token</span><span class="stat-value ${lockedIn >= 10 ? 'good' : lockedIn >= 5 ? 'warn' : 'bad'}">$${fmt(lockedIn)}</span></div>
+    <div class="stat"><span class="stat-label">10-token total</span><span class="stat-value good">$${fmt(tenTokenTotal)}</span></div>
+    <div class="stat"><span class="stat-label">Vig (unboosted)</span><span class="stat-value ${vig <= 3 ? 'good' : vig <= 6 ? 'warn' : 'bad'}">${fmt(vig, 2)}%</span></div>
+  `;
+  return { stakeA: stake, hedgeStake: hedge, expectedProfit: lockedIn, stakeType: 'Profit Boost', amA, amB };
+}
+
+function calcE(vals, outputEl) {
+  // Bet-and-get Win-or-Lose: qualifying cost + bonus conversion
+  const { qualStake, bonus, amA, amB } = vals;
+  const decA = americanToDecimal(amA);
+  const decB = americanToDecimal(amB);
+  if (qualStake <= 0 || bonus <= 0 || decA <= 1 || decB <= 1) {
+    outputEl.innerHTML = '<div class="stat"><span class="stat-label">Invalid inputs (American odds must be ≥ +100 or ≤ −100)</span></div>';
+    return;
+  }
+  // Qualifying bet: usually just place at any odds — assume zero-hedge, accept small variance.
+  // Bonus conversion: SNR calc at decA/decB.
+  const bonusHedge = (bonus * (decA - 1)) / decB;
+  const bonusLockedIn = bonus * (decA - 1) - bonusHedge;
+  const bonusConvPct = (bonusLockedIn / bonus) * 100;
+  const netTotal = bonusLockedIn - qualStake; // conservative: assume qual stake is lost
+  const combinedProb = (impliedProb(decA) + impliedProb(decB)) * 100;
+  const vig = combinedProb - 100;
+
+  outputEl.innerHTML = `
+    <div class="stat"><span class="stat-label">Decimal (A / B)</span><span class="stat-value">${fmt(decA, 3)} / ${fmt(decB, 3)}</span></div>
+    <div class="stat"><span class="stat-label">Qualifying stake at risk</span><span class="stat-value">$${fmt(qualStake)}</span></div>
+    <div class="stat"><span class="stat-label">Bonus hedge stake</span><span class="stat-value">$${fmt(bonusHedge)}</span></div>
+    <div class="stat"><span class="stat-label">Bonus locked-in</span><span class="stat-value good">$${fmt(bonusLockedIn)}</span></div>
+    <div class="stat"><span class="stat-label">Bonus conversion rate</span><span class="stat-value ${bonusConvPct >= 70 ? 'good' : 'warn'}">${fmt(bonusConvPct, 1)}%</span></div>
+    <div class="stat"><span class="stat-label">Net total (conservative)</span><span class="stat-value good">$${fmt(netTotal)}</span></div>
+    <div class="stat"><span class="stat-label">Vig</span><span class="stat-value ${vig <= 3 ? 'good' : vig <= 6 ? 'warn' : 'bad'}">${fmt(vig, 2)}%</span></div>
+  `;
+  return { stakeA: qualStake, hedgeStake: bonusHedge, expectedProfit: netTotal, stakeType: 'Cash+Bonus', amA, amB };
+}
+
+const CALC_CONFIG = {
+  A: {
+    title: 'SNR Bonus Conversion',
+    fields: [
+      { key: 'bonus', label: 'Bonus Amount ($)', step: '0.01' },
+      { key: 'amA', label: 'Bonus Leg American (Book A)', step: '1' },
+      { key: 'amB', label: 'Hedge Leg American (Book B)', step: '1' }
+    ],
+    note: 'Bet the full bonus at Book A. Place hedge stake at Book B on opposite outcome. Profit locked-in regardless of winner. Enter American odds as +200, -150, etc. (positive = underdog, negative = favorite).',
+    fn: calcA
+  },
+  B: {
+    title: 'Cash Qualifying Hedge',
+    fields: [
+      { key: 'stake', label: 'Qualifying Stake ($)', step: '0.01' },
+      { key: 'amA', label: 'Book A American Odds', step: '1' },
+      { key: 'amB', label: 'Book B American Odds', step: '1' }
+    ],
+    note: 'Used for risk-free qualifying bets (e.g., Fanatics daily match). Hedge balances cash outcome; promo credit is separate upside. Enter American odds (+100 for even money).',
+    fn: calcB
+  },
+  C: {
+    title: 'First-Bet Insurance / Reset',
+    fields: [
+      { key: 'stake', label: 'Qualifying Stake ($)', step: '0.01' },
+      { key: 'amA', label: 'Book A American (insured)', step: '1' },
+      { key: 'amB', label: 'Book B American (hedge)', step: '1' },
+      { key: 'refundPct', label: 'Refund % on Loss', step: '1' },
+      { key: 'tokens', label: '# Tokens Issued on Loss', step: '1' },
+      { key: 'conv', label: 'Assumed Conversion %', step: '1' }
+    ],
+    note: 'Balanced hedge — both outcomes net the same locked-in profit, assuming you convert the refunded bonus at the stated rate (default 70%). Under-hedge the cash leg by the expected bonus value V = stake × refund% × conv%. If your real conversion beats 70% you pocket the surplus; if it misses, the loss side is short.',
+    fn: calcC
+  },
+  D: {
+    title: 'Profit Boost Token',
+    fields: [
+      { key: 'stake', label: 'Stake per Token ($)', step: '0.01' },
+      { key: 'boost', label: 'Boost % (usually 100)', step: '1' },
+      { key: 'amA', label: 'Boosted Leg American (Book A)', step: '1' },
+      { key: 'amB', label: 'Hedge Leg American (Book B)', step: '1' }
+    ],
+    note: 'Boost doubles profit (not stake). Higher American odds (+200, +300) extract more value per token. Enter American odds as integers.',
+    fn: calcD
+  },
+  E: {
+    title: 'Bet-and-Get Win-or-Lose',
+    fields: [
+      { key: 'qualStake', label: 'Qualifying Stake ($)', step: '0.01' },
+      { key: 'bonus', label: 'Guaranteed Bonus ($)', step: '0.01' },
+      { key: 'amA', label: 'Bonus Leg American (Book A)', step: '1' },
+      { key: 'amB', label: 'Hedge Leg American (Book B)', step: '1' }
+    ],
+    note: 'Bonus is guaranteed regardless of qualifying outcome. Conservatively treats qualifying stake as lost; actual net is higher if qualifying bet wins. Enter American odds (+/-).',
+    fn: calcE
+  }
+};
+
+// =========================================================================
+// RENDER
+// =========================================================================
+
+const STATE_VERSION = 2;
+
+function loadState() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('azPromoState') || '{}');
+    if (raw._version !== STATE_VERSION) {
+      return { _version: STATE_VERSION, statuses: raw.statuses || {} };
+    }
+    return raw;
+  } catch { return { _version: STATE_VERSION }; }
+}
+
+let _saveTimer = null;
+function saveState(state) {
+  state._version = STATE_VERSION;
+  state._lastModified = Date.now();
+  localStorage.setItem('azPromoState', JSON.stringify(state));
+  // Debounced push to server (if running)
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(() => {
+    fetch('/state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(state)
+    }).then(() => setSyncStatus('synced'))
+      .catch(() => setSyncStatus('offline'));
+  }, 300);
+}
+
+function setSyncStatus(status) {
+  const el = document.getElementById('syncStatus');
+  if (!el) return;
+  const map = {
+    synced:  { text: '● synced',  color: 'var(--green)' },
+    syncing: { text: '● syncing', color: 'var(--yellow)' },
+    offline: { text: '● local only', color: 'var(--text-dim)' }
+  };
+  const m = map[status] || map.offline;
+  el.textContent = m.text;
+  el.style.color = m.color;
+}
+
+function _contentScore(s) {
+  // Rough measure of "how much real data" a state has.
+  if (!s) return 0;
+  const bets = (s.bets && s.bets.length) || 0;
+  const statuses = s.statuses ? Object.keys(s.statuses).length : 0;
+  const inputs = s.inputs ? Object.keys(s.inputs).length : 0;
+  return bets * 10 + statuses + inputs;
+}
+
+async function syncFromServer() {
+  setSyncStatus('syncing');
+  try {
+    const res = await fetch('/state', { cache: 'no-store' });
+    if (!res.ok) { setSyncStatus('offline'); return; }
+    const server = await res.json();
+    const local = JSON.parse(localStorage.getItem('azPromoState') || '{}');
+    const serverOK = server && server._version === STATE_VERSION;
+    const localOK  = local  && local._version  === STATE_VERSION;
+
+    const serverScore = serverOK ? _contentScore(server) : 0;
+    const localScore  = localOK  ? _contentScore(local)  : 0;
+    const serverTs = (serverOK && server._lastModified) || 0;
+    const localTs  = (localOK  && local._lastModified)  || 0;
+
+    // Decision: pull if server has strictly more content, OR server is newer by timestamp.
+    const shouldPull = serverOK && (serverScore > localScore || (serverScore === localScore && serverTs > localTs));
+    const shouldPush = localOK && !shouldPull && (localScore > serverScore || localTs > serverTs);
+
+    if (shouldPull) {
+      // Stamp timestamp if missing so future syncs compare cleanly.
+      if (!server._lastModified) server._lastModified = Date.now();
+      localStorage.setItem('azPromoState', JSON.stringify(server));
+      location.reload();
+      return;
+    }
+    if (shouldPush) {
+      const stamped = { ...local, _lastModified: local._lastModified || Date.now() };
+      localStorage.setItem('azPromoState', JSON.stringify(stamped));
+      await fetch('/state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(stamped)
+      }).catch(() => {});
+    }
+    setSyncStatus('synced');
+  } catch {
+    setSyncStatus('offline');
+  }
+}
+
+const state = loadState();
+if (!state.bets) state.bets = [];
+if (state.trackerCollapsed === undefined) state.trackerCollapsed = false;
+
+const latestResults = {};
+
+// Books that can switch to Type A SNR conversion mode for the bonus/token leg.
+// Type C books switch after a first-bet loss; Fanatics switches after earning
+// FanCash from the daily qualifying bet.
+const CONVERSION_DEFAULTS = {
+  betmgm:    { bonus: 1500, amA: 300, amB: -278, primaryLabel: 'First Bet (hedge)', conversionLabel: 'SNR Conversion' },
+  thescore:  { bonus: 200,  amA: 300, amB: -278, primaryLabel: 'First Bet (hedge)', conversionLabel: 'SNR Conversion' },
+  betrivers: { bonus: 100,  amA: 300, amB: -278, primaryLabel: 'First Bet (hedge)', conversionLabel: 'SNR Conversion' },
+  fanatics:  { bonus: 100,  amA: 300, amB: -278, primaryLabel: 'Qualifying Bet',   conversionLabel: 'FanCash Conversion' },
+  desertdiamond: { bonus: 250, amA: 300, amB: -278, primaryLabel: 'Qualifying Bet', conversionLabel: 'SNR Conversion' }
+};
+
+function supportsConversionToggle(book) {
+  return !!CONVERSION_DEFAULTS[book.id];
+}
+
+function getEffectiveCalcType(book) {
+  const override = state.calcMode && state.calcMode[book.id];
+  if (override && CALC_CONFIG[override]) return override;
+  return book.calcType;
+}
+
+function getInputsForMode(book, mode) {
+  const key = book.id + ':' + mode;
+  const scoped = state.inputs && state.inputs[key];
+  if (scoped) return scoped;
+  if (mode === book.calcType) {
+    const legacy = state.inputs && state.inputs[book.id];
+    if (legacy) return legacy;
+    return book.calcDefaults;
+  }
+  if (mode === 'A' && CONVERSION_DEFAULTS[book.id]) return CONVERSION_DEFAULTS[book.id];
+  return CALC_CONFIG[mode].fields.reduce((acc, f) => (acc[f.key] = 0, acc), {});
+}
+
+function renderBook(book) {
+  const status = (state.statuses && state.statuses[book.id]) || book.defaultStatus;
+  const mode = getEffectiveCalcType(book);
+  const inputs = getInputsForMode(book, mode);
+  const config = CALC_CONFIG[mode];
+
+  const metaRows = Object.entries(book.meta)
+    .map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`)
+    .join('');
+
+  const strategyItems = book.strategy.map(s => `<li>${s}</li>`).join('');
+  const gotchaBlocks = book.gotchas.map(g => `<div class="gotcha"><strong>Gotcha:</strong> ${g}</div>`).join('');
+
+  const inputFields = config.fields.map(f => `
+    <label>${f.label}
+      <input type="number" step="${f.step}" data-key="${f.key}" value="${inputs[f.key] ?? ''}">
+    </label>
+  `).join('');
+
+  return `
+    <section class="book status-${status}" id="book-${book.id}">
+      <div class="book-header">
+        <div class="book-title">
+          <span class="book-name">${book.name}</span>
+          <span class="book-offer">${book.offer}</span>
+        </div>
+        <button class="status-btn status-${status}" data-book="${book.id}">${STATUS_LABELS[status]}</button>
+      </div>
+      <div class="book-body">
+        <div class="block">
+          <h3>Promo Details</h3>
+          <dl class="promo-meta">${metaRows}</dl>
+          ${gotchaBlocks}
+        </div>
+        <div class="block">
+          <h3>Strategy</h3>
+          <ul>${strategyItems}</ul>
+        </div>
+        <div class="block">
+          <div class="calc-header">
+            <h3>${config.title}</h3>
+            ${supportsConversionToggle(book) ? `
+              <div class="calc-mode-toggle" data-book="${book.id}">
+                <button data-mode="${book.calcType}" class="${mode === book.calcType ? 'active' : ''}">${CONVERSION_DEFAULTS[book.id].primaryLabel}</button>
+                <button data-mode="A" class="${mode === 'A' ? 'active' : ''}">${CONVERSION_DEFAULTS[book.id].conversionLabel}</button>
+              </div>
+            ` : ''}
+          </div>
+          <div class="calc-inputs" data-book="${book.id}">
+            ${inputFields}
+          </div>
+          <div class="calc-outputs" data-output="${book.id}"></div>
+          <div class="calc-note">${config.note}</div>
+          <button class="track-btn" data-track="${book.id}">+ Add to Tracker</button>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function rewireBook(book) {
+  const inputsEl = document.querySelector(`.calc-inputs[data-book="${book.id}"]`);
+  const outputEl = document.querySelector(`.calc-outputs[data-output="${book.id}"]`);
+  if (!inputsEl || !outputEl) return;
+  const mode = getEffectiveCalcType(book);
+  const config = CALC_CONFIG[mode];
+
+  const recompute = () => {
+    const vals = {};
+    inputsEl.querySelectorAll('input').forEach(i => {
+      vals[i.dataset.key] = parseFloat(i.value) || 0;
+    });
+    const result = config.fn(vals, outputEl);
+    if (result) result.calcMode = mode;
+    latestResults[book.id] = result;
+    state.inputs = state.inputs || {};
+    state.inputs[book.id + ':' + mode] = vals;
+    saveState(state);
+  };
+  inputsEl.querySelectorAll('input').forEach(i => i.addEventListener('input', recompute));
+  recompute();
+
+  // Wire the mode toggle if present
+  const toggle = document.querySelector(`.calc-mode-toggle[data-book="${book.id}"]`);
+  if (toggle) {
+    toggle.querySelectorAll('button').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const newMode = btn.dataset.mode;
+        state.calcMode = state.calcMode || {};
+        state.calcMode[book.id] = newMode;
+        saveState(state);
+        const section = document.getElementById('book-' + book.id);
+        const temp = document.createElement('div');
+        temp.innerHTML = renderBook(book);
+        const fresh = temp.firstElementChild;
+        section.replaceWith(fresh);
+        rewireBook(book);
+        // Rewire status button for the replaced section
+        const statusBtn = fresh.querySelector('.status-btn');
+        if (statusBtn) {
+          statusBtn.addEventListener('click', () => {
+            const current = (state.statuses && state.statuses[book.id]) || book.defaultStatus;
+            const idx = STATUSES.indexOf(current);
+            const next = STATUSES[(idx + 1) % STATUSES.length];
+            state.statuses = state.statuses || {};
+            state.statuses[book.id] = next;
+            saveState(state);
+            const section2 = document.getElementById('book-' + book.id);
+            STATUSES.forEach(s => section2.classList.remove('status-' + s));
+            section2.classList.add('status-' + next);
+            STATUSES.forEach(s => statusBtn.classList.remove('status-' + s));
+            statusBtn.classList.add('status-' + next);
+            statusBtn.textContent = STATUS_LABELS[next];
+            updateSummary();
+          });
+        }
+        const trackBtn = fresh.querySelector(`[data-track="${book.id}"]`);
+        if (trackBtn) {
+          trackBtn.addEventListener('click', () => {
+            const result = latestResults[book.id];
+            if (!result) { alert('Fill in calculator inputs first.'); return; }
+            addBet(book, result);
+          });
+        }
+      });
+    });
+  }
+}
+
+function renderBooks() {
+  const main = document.getElementById('books');
+  main.innerHTML = BOOKS.map(renderBook).join('');
+
+  const nav = document.getElementById('bookNav');
+  nav.innerHTML = BOOKS.map(b => `<a href="#book-${b.id}">${b.name}</a>`).join('');
+
+  BOOKS.forEach(rewireBook);
+
+  document.querySelectorAll('[data-track]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const bookId = btn.dataset.track;
+      const book = BOOKS.find(b => b.id === bookId);
+      const result = latestResults[bookId];
+      if (!result) { alert('Fill in calculator inputs first.'); return; }
+      addBet(book, result);
+    });
+  });
+
+  document.querySelectorAll('.status-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const bookId = btn.dataset.book;
+      const current = (state.statuses && state.statuses[bookId]) || BOOKS.find(b => b.id === bookId).defaultStatus;
+      const idx = STATUSES.indexOf(current);
+      const next = STATUSES[(idx + 1) % STATUSES.length];
+      state.statuses = state.statuses || {};
+      state.statuses[bookId] = next;
+      saveState(state);
+      // Update visuals
+      const section = document.getElementById('book-' + bookId);
+      STATUSES.forEach(s => section.classList.remove('status-' + s));
+      section.classList.add('status-' + next);
+      STATUSES.forEach(s => btn.classList.remove('status-' + s));
+      btn.classList.add('status-' + next);
+      btn.textContent = STATUS_LABELS[next];
+      updateSummary();
+    });
+  });
+}
+
+// =========================================================================
+// SUMMARY BAR
+// =========================================================================
+
+function initSummary() {
+  const deposited = document.getElementById('totalDeposited');
+  deposited.value = state.totalDeposited ?? '';
+  deposited.addEventListener('input', () => {
+    state.totalDeposited = parseFloat(deposited.value) || 0;
+    saveState(state);
+  });
+  updateSummary();
+}
+
+function updateSummary() {
+  // Pipeline remaining: sum est EVs for books NOT complete/blocked
+  let pipeline = 0;
+  BOOKS.forEach(b => {
+    const status = (state.statuses && state.statuses[b.id]) || b.defaultStatus;
+    if (status !== 'complete' && status !== 'blocked') {
+      const estStr = b.meta['Est Net EV'] || '';
+      const nums = estStr.match(/\d[\d,]*/g);
+      if (nums) {
+        const vals = nums.map(n => parseFloat(n.replace(/,/g, '')));
+        const avg = vals.reduce((a, c) => a + c, 0) / vals.length;
+        pipeline += avg;
+      }
+    }
+  });
+  document.getElementById('pipelineRemaining').textContent = '$' + Math.round(pipeline).toLocaleString('en-US');
+
+  // Bets summary
+  const active = state.bets.filter(b => b.status === 'active');
+  const settled = state.bets.filter(b => b.status !== 'active');
+  const pending = active.reduce((sum, b) => sum + (b.expectedProfit || 0), 0);
+  const realized = settled.reduce((sum, b) => sum + (b.realizedProfit || 0), 0);
+
+  document.getElementById('sumActive').textContent = active.length;
+  document.getElementById('sumPending').textContent = '$' + pending.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const realizedEl = document.getElementById('sumRealized');
+  realizedEl.textContent = '$' + realized.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  realizedEl.className = 'summary-stat-value ' + (realized >= 0 ? 'good' : 'warn');
+}
+
+// =========================================================================
+// BET TRACKER
+// =========================================================================
+
+function toLocalDatetimeValue(iso) {
+  // Convert ISO string to value suitable for <input type="datetime-local">
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function relativeTime(iso) {
+  const target = new Date(iso).getTime();
+  if (!isFinite(target)) return { text: '', overdue: false, soon: false };
+  const diffMin = Math.round((target - Date.now()) / 60000);
+  if (diffMin < 0) return { text: `overdue ${fmtDuration(-diffMin)}`, overdue: true, soon: false };
+  if (diffMin < 60) return { text: `in ${diffMin}m`, overdue: false, soon: true };
+  const diffH = diffMin / 60;
+  if (diffH < 24) return { text: `in ${diffH.toFixed(1)}h`, overdue: false, soon: diffH < 3 };
+  const diffD = diffH / 24;
+  return { text: `in ${diffD.toFixed(1)}d`, overdue: false, soon: false };
+}
+
+function fmtDuration(minutes) {
+  if (minutes < 60) return `${minutes}m`;
+  const h = minutes / 60;
+  if (h < 24) return `${h.toFixed(1)}h`;
+  return `${(h / 24).toFixed(1)}d`;
+}
+
+function addBet(book, result) {
+  const now = new Date();
+  const bet = {
+    id: 'bet_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+    bookId: book.id,
+    bookName: book.name,
+    calcType: book.calcType,
+    description: '',
+    date: now.toISOString(),
+    stakeA: result.stakeA,
+    hedgeStake: result.hedgeStake,
+    expectedProfit: result.expectedProfit,
+    amA: result.amA,
+    amB: result.amB,
+    stakeType: result.stakeType,
+    status: 'active',
+    realizedProfit: null,
+    resolvesAt: null
+  };
+  state.bets.unshift(bet);
+  saveState(state);
+  renderTracker();
+  updateSummary();
+}
+
+function updateBet(id, field, value) {
+  const bet = state.bets.find(b => b.id === id);
+  if (!bet) return;
+  if (field === 'status') {
+    bet.status = value;
+    if (value === 'won' || value === 'lost') {
+      if (bet.realizedProfit == null) bet.realizedProfit = bet.expectedProfit;
+    } else if (value === 'active') {
+      bet.realizedProfit = null;
+    } else if (value === 'pushed' || value === 'voided') {
+      if (bet.realizedProfit == null) bet.realizedProfit = 0;
+    }
+  } else if (field === 'realizedProfit') {
+    bet.realizedProfit = parseFloat(value);
+    if (!isFinite(bet.realizedProfit)) bet.realizedProfit = 0;
+  } else if (field === 'resolvesAt') {
+    bet.resolvesAt = value ? new Date(value).toISOString() : null;
+  } else {
+    bet[field] = value;
+  }
+  saveState(state);
+  renderTracker();
+  updateSummary();
+}
+
+function deleteBet(id) {
+  if (!confirm('Delete this bet from tracker?')) return;
+  state.bets = state.bets.filter(b => b.id !== id);
+  saveState(state);
+  renderTracker();
+  updateSummary();
+}
+
+function renderTracker() {
+  const body = document.getElementById('trackerBody');
+  body.className = 'tracker-body' + (state.trackerCollapsed ? ' collapsed' : '');
+  document.getElementById('trackerToggle').textContent = state.trackerCollapsed ? 'Show' : 'Hide';
+
+  if (state.bets.length === 0) {
+    body.innerHTML = '<div class="tracker-empty">No bets tracked yet. Fill in a calculator and click "Add to Tracker" on any book to start.</div>';
+    return;
+  }
+
+  const statusOptions = ['active', 'won', 'lost', 'pushed', 'voided'];
+  const rows = state.bets.map(bet => {
+    const date = new Date(bet.date);
+    const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' + date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    const statusClass = bet.status !== 'active' ? 'settled-' + bet.status : '';
+    const oddsStr = fmtAmerican(bet.amA) + ' / ' + fmtAmerican(bet.amB);
+    const realizedVal = bet.realizedProfit != null ? bet.realizedProfit : '';
+    const resolvesVal = bet.resolvesAt ? toLocalDatetimeValue(bet.resolvesAt) : '';
+    const resolvesHint = bet.resolvesAt && bet.status === 'active' ? relativeTime(bet.resolvesAt) : '';
+    const resolvesHintClass = resolvesHint.overdue ? 'bad' : resolvesHint.soon ? 'warn' : 'dim';
+
+    return `
+      <tr class="${statusClass}">
+        <td>${dateStr}</td>
+        <td><strong>${bet.bookName}</strong><br><span style="color:var(--text-dim);font-size:11px">${bet.stakeType}</span></td>
+        <td><input class="desc" type="text" placeholder="e.g. Dodgers ML" value="${bet.description || ''}" data-id="${bet.id}" data-field="description"></td>
+        <td class="mono">$${fmt(bet.stakeA)}</td>
+        <td class="mono">$${fmt(bet.hedgeStake)}</td>
+        <td class="mono">${oddsStr}</td>
+        <td class="mono" style="color:var(--text-dim)">$${fmt(bet.expectedProfit)}</td>
+        <td>
+          <input type="datetime-local" class="resolves" value="${resolvesVal}" data-id="${bet.id}" data-field="resolvesAt">
+          ${resolvesHint.text ? `<div class="resolves-hint ${resolvesHintClass}">${resolvesHint.text}</div>` : ''}
+        </td>
+        <td>
+          <select data-id="${bet.id}" data-field="status">
+            ${statusOptions.map(s => `<option value="${s}" ${bet.status === s ? 'selected' : ''}>${s.charAt(0).toUpperCase() + s.slice(1)}</option>`).join('')}
+          </select>
+        </td>
+        <td><input class="num" type="number" step="0.01" value="${realizedVal}" data-id="${bet.id}" data-field="realizedProfit" ${bet.status === 'active' ? 'disabled' : ''}></td>
+        <td><button class="icon-btn" data-delete="${bet.id}" title="Delete">✕</button></td>
+      </tr>
+    `;
+  }).join('');
+
+  body.innerHTML = `
+    <table class="tracker-table">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Book / Type</th>
+          <th>Description</th>
+          <th>Stake A</th>
+          <th>Hedge</th>
+          <th>Odds (A/B)</th>
+          <th>Expected</th>
+          <th>Resolves</th>
+          <th>Status</th>
+          <th>Realized</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+
+  body.querySelectorAll('[data-field]').forEach(el => {
+    const field = el.dataset.field;
+    if (field === 'description') {
+      // Save silently on input — no re-render, so focus is preserved
+      el.addEventListener('input', () => {
+        const bet = state.bets.find(b => b.id === el.dataset.id);
+        if (bet) { bet.description = el.value; saveState(state); }
+      });
+    } else {
+      el.addEventListener('change', () => updateBet(el.dataset.id, field, el.value));
+    }
+  });
+  body.querySelectorAll('[data-delete]').forEach(btn => {
+    btn.addEventListener('click', () => deleteBet(btn.dataset.delete));
+  });
+}
+
+function initTrackerToggle() {
+  document.getElementById('trackerToggle').addEventListener('click', () => {
+    state.trackerCollapsed = !state.trackerCollapsed;
+    saveState(state);
+    renderTracker();
+  });
+}
+
+// =========================================================================
+// CHECKLIST
+// =========================================================================
+
+// Each book has `base` tasks, optional `outcome` branching (won/lost), and
+// `onWin`/`onLoss` task arrays. Some books have no branching (Type D boost,
+// Type B daily match) — they just have `base` items.
+function buildChecklists() {
+  const tokenItems = (n, prefix) => Array.from({ length: n }, (_, i) => ({
+    id: `${prefix}${i + 1}`,
+    label: `Token ${i + 1} converted`
+  }));
+  const dayItems = () => {
+    const out = [];
+    for (let d = 1; d <= 10; d++) {
+      out.push({ id: `d${d}_bet`, label: `Day ${d}: place $100 qualifying bet at ~−110 / −110` });
+      out.push({ id: `d${d}_fc`,  label: `Day ${d}: $100 FanCash credited` });
+      out.push({ id: `d${d}_conv`,label: `Day ${d}: FanCash converted (hedged)` });
+    }
+    return out;
+  };
+
+  return {
+    fanduel: {
+      subtitle: 'Bet $5, Get $250 if qualifying wins',
+      base: [
+        { id: 'signup', label: 'Sign up on FanDuel' },
+        { id: 'fund', label: 'Fund account (~$600 for conversion hedge)' },
+        { id: 'qualBet', label: 'Place $5 qualifying bet on heavy favorite (−10000+ OK)' },
+        { id: 'outcome', type: 'outcome', label: 'Qualifying bet outcome' }
+      ],
+      onWin: [
+        { id: 'tokenIssued', label: 'Confirm $250 bonus bet credited' },
+        { id: 'convert', label: 'Convert $250 at decimal 3.0–4.0, hedged at Caesars/other' },
+        { id: 'settled', label: 'Conversion bets settled — ~$199 locked in' }
+      ],
+      onLoss: [
+        { id: 'done', label: 'Qualifying bet lost — no bonus. Promo complete.' }
+      ]
+    },
+    draftkings: {
+      subtitle: 'Bet $5, Get $300 (12 × $25) if qualifying wins',
+      base: [
+        { id: 'signup', label: 'Sign up on DraftKings' },
+        { id: 'kyc', label: 'Complete identity verification' },
+        { id: 'fund', label: 'Fund account (~$100 for token-cycling hedge)' },
+        { id: 'qualBet', label: 'Place $5 qualifying bet at −200 or longer' },
+        { id: 'outcome', type: 'outcome', label: 'Qualifying bet outcome' }
+      ],
+      onWin: [
+        { id: 'tokensIssued', label: 'Confirm 12 × $25 tokens credited' },
+        ...tokenItems(12, 'tok')
+      ],
+      onLoss: [
+        { id: 'done', label: 'Qualifying bet lost — no bonus. Promo complete.' }
+      ]
+    },
+    betmgm: {
+      subtitle: 'First Bet Refund up to $1,500 — balanced hedge',
+      base: [
+        { id: 'signup', label: 'Sign up on BetMGM' },
+        { id: 'fund', label: 'Fund $1,500 at BetMGM + reserve ~$975 hedge capital' },
+        { id: 'market', label: 'Find two-way market near +100 / +100, low vig' },
+        { id: 'qualBet', label: 'Place $1,500 on BetMGM' },
+        { id: 'hedgeLeg', label: 'Place $975 balanced hedge at other book' },
+        { id: 'outcome', type: 'outcome', label: 'BetMGM bet outcome' }
+      ],
+      onWin: [
+        { id: 'done', label: 'Promo burns — ~$525 locked in. No conversion needed.' }
+      ],
+      onLoss: [
+        { id: 'tokenIssued', label: 'Confirm $1,500 SNR token credited (within 24h)' },
+        { id: 'convert', label: 'Convert token at decimal ~3.5, hedged' },
+        { id: 'settled', label: 'Conversion settled — ~$525 locked in' }
+      ]
+    },
+    thescore: {
+      subtitle: 'Bet Reset $1,000 → 5 × $200 if loses',
+      base: [
+        { id: 'signup', label: 'Sign up on theScore Bet (no prior ESPN BET/Penn account)' },
+        { id: 'fund', label: 'Fund $1,000 + reserve ~$650 hedge' },
+        { id: 'market', label: 'Find two-way market near +100 / +100' },
+        { id: 'qualBet', label: 'Place $1,000 on theScore' },
+        { id: 'hedgeLeg', label: 'Place $650 balanced hedge at other book' },
+        { id: 'outcome', type: 'outcome', label: 'theScore bet outcome' }
+      ],
+      onWin: [
+        { id: 'done', label: 'Promo burns — ~$350 locked in. No conversion needed.' }
+      ],
+      onLoss: [
+        { id: 'tokensIssued', label: 'Confirm 5 × $200 tokens credited' },
+        ...tokenItems(5, 'tok')
+      ]
+    },
+    betrivers: {
+      subtitle: '2nd Chance Bet up to $100 (AZ)',
+      base: [
+        { id: 'signup', label: 'Sign up on BetRivers' },
+        { id: 'optin', label: 'Opt in to 2nd Chance Bet promo in app' },
+        { id: 'fund', label: 'Fund $100 + reserve ~$65 hedge (optional)' },
+        { id: 'qualBet', label: 'Place $100 qualifying bet at −200 or longer' },
+        { id: 'outcome', type: 'outcome', label: 'BetRivers bet outcome' }
+      ],
+      onWin: [
+        { id: 'done', label: 'Cash profit kept. Promo slot burned.' }
+      ],
+      onLoss: [
+        { id: 'tokenIssued', label: 'Confirm $100 SNR token credited (within 24h — else contact support)' },
+        { id: 'convert', label: 'Convert $100 token at decimal ~3.0–3.5, hedged' },
+        { id: 'settled', label: 'Conversion settled — ~$35 locked in' }
+      ]
+    },
+    caesars: {
+      subtitle: '10 × 100% Profit Boost ($25 max stake)',
+      base: [
+        { id: 'signup', label: 'Sign up with promo code (e.g., COVERSBONUSDYW)' },
+        { id: 'verify', label: 'Confirm 10 boost tokens appear in Promos tab' },
+        { id: 'fund', label: 'Fund ~$130 for single-token hedge cycle' },
+        ...tokenItems(10, 'tok')
+      ]
+    },
+    hardrock: {
+      subtitle: '10 × 100% Profit Boost ($50 max stake)',
+      base: [
+        { id: 'signup', label: 'Sign up on Hard Rock Bet' },
+        { id: 'verify', label: 'Confirm 10 × $50 boost tokens in Promos tab' },
+        { id: 'fund', label: 'Fund ~$260 for single-token hedge cycle' },
+        ...tokenItems(10, 'tok')
+      ]
+    },
+    fanatics: {
+      subtitle: '10 × $100 Daily Bet Match (FanCash)',
+      base: [
+        { id: 'signup', label: 'Sign up on Fanatics' },
+        { id: 'fund', label: 'Fund ~$100/day rolling + ~$100 hedge capital' },
+        ...dayItems()
+      ]
+    },
+    bet365: {
+      subtitle: 'Bet $10, Get $365 (blocked for user)',
+      blocked: true,
+      base: [
+        { id: 'blocked', label: 'Account locked out from prior attempt — skip this book.' }
+      ]
+    },
+    desertdiamond: {
+      subtitle: '$250 Welcome Match (Bonus Bets, Win or Lose)',
+      base: [
+        { id: 'signup', label: 'Sign up on Desert Diamond' },
+        { id: 'fund', label: 'Fund $250 + reserve ~$250 hedge capital' },
+        { id: 'qualBet', label: 'Place $250 qualifying bet at decimal ~2.0, hedged at another book' },
+        { id: 'tokensIssued', label: 'Confirm $250 SNR bonus bets credited' },
+        { id: 'convert', label: 'Convert $250 SNR bonus at decimal 3.0–4.0 (min odds −200 or longer), hedged' },
+        { id: 'settled', label: 'Conversion settled — ~$175 locked in' }
+      ]
+    }
+  };
+}
+
+const CHECKLISTS = buildChecklists();
+
+function getChecklistState(bookId) {
+  if (!state.checklist) state.checklist = {};
+  if (!state.checklist[bookId]) state.checklist[bookId] = { items: {}, outcome: 'pending' };
+  if (!state.checklist[bookId].items) state.checklist[bookId].items = {};
+  if (!state.checklist[bookId].outcome) state.checklist[bookId].outcome = 'pending';
+  return state.checklist[bookId];
+}
+
+function renderChecklist() {
+  const wrap = document.getElementById('checklistWrap');
+  const order = ['fanduel', 'draftkings', 'betmgm', 'thescore', 'betrivers', 'caesars', 'hardrock', 'fanatics', 'desertdiamond', 'bet365'];
+  const bookById = Object.fromEntries(BOOKS.map(b => [b.id, b]));
+
+  wrap.innerHTML = order.map(id => {
+    const book = bookById[id];
+    const cl = CHECKLISTS[id];
+    if (!book || !cl) return '';
+    const s = getChecklistState(id);
+
+    // Determine effective task list based on outcome branching
+    const hasOutcome = cl.base.some(t => t.type === 'outcome');
+    const branch = hasOutcome
+      ? (s.outcome === 'won' ? cl.onWin : s.outcome === 'lost' ? cl.onLoss : null)
+      : null;
+
+    const baseTasks = cl.base.filter(t => t.type !== 'outcome');
+    const branchTasks = branch || [];
+    const allTasks = [...baseTasks, ...branchTasks];
+    const doneCount = allTasks.filter(t => s.items[t.id]).length;
+    const totalCount = allTasks.length;
+
+    const renderItem = (t) => {
+      const checked = !!s.items[t.id];
+      return `<div class="cl-item ${checked ? 'done' : ''}">
+        <input type="checkbox" ${checked ? 'checked' : ''} data-book="${id}" data-task="${t.id}">
+        <label>${t.label}</label>
+      </div>`;
+    };
+
+    const baseHtml = cl.base.map(t => {
+      if (t.type === 'outcome') {
+        return `
+          <div class="cl-section-label">${t.label}</div>
+          <div class="cl-outcome" data-outcome-book="${id}">
+            <button class="${s.outcome === 'pending' ? 'active-pending' : ''}" data-outcome="pending">Pending</button>
+            <button class="${s.outcome === 'won' ? 'active-won' : ''}" data-outcome="won">Won</button>
+            <button class="${s.outcome === 'lost' ? 'active-lost' : ''}" data-outcome="lost">Lost</button>
+          </div>`;
+      }
+      return renderItem(t);
+    }).join('');
+
+    let branchHtml = '';
+    if (hasOutcome) {
+      if (s.outcome === 'pending') {
+        branchHtml = `<div class="cl-branch-note">Set outcome above to unlock next steps.</div>`;
+      } else if (s.outcome === 'won') {
+        branchHtml = `<div class="cl-section-label">Win path</div>` + cl.onWin.map(renderItem).join('');
+      } else if (s.outcome === 'lost') {
+        branchHtml = `<div class="cl-section-label">Loss path — bonus conversion</div>` + cl.onLoss.map(renderItem).join('');
+      }
+    }
+
+    return `
+      <div class="checklist-card ${cl.blocked ? 'blocked' : ''}">
+        <h3>${book.name} <span class="cl-progress">${doneCount}/${totalCount}</span></h3>
+        <div class="cl-sub">${cl.subtitle}</div>
+        ${baseHtml}
+        ${branchHtml}
+      </div>
+    `;
+  }).join('');
+
+  // Wire checkboxes
+  wrap.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const s = getChecklistState(cb.dataset.book);
+      s.items[cb.dataset.task] = cb.checked;
+      saveState(state);
+      renderChecklist();
+    });
+  });
+  // Wire outcome buttons
+  wrap.querySelectorAll('.cl-outcome').forEach(div => {
+    const bookId = div.dataset.outcomeBook;
+    div.querySelectorAll('button').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const s = getChecklistState(bookId);
+        s.outcome = btn.dataset.outcome;
+        saveState(state);
+        renderChecklist();
+      });
+    });
+  });
+}
+
+function initTabs() {
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const view = btn.dataset.view;
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b === btn));
+      document.getElementById('dashboardView').classList.toggle('hidden', view !== 'dashboard');
+      document.getElementById('checklistView').classList.toggle('hidden', view !== 'checklist');
+      if (view === 'checklist') renderChecklist();
+    });
+  });
+}
+
+// =========================================================================
+// INIT
+// =========================================================================
+renderBooks();
+initSummary();
+renderTracker();
+initTrackerToggle();
+initTabs();
+renderChecklist();
+syncFromServer();
+</script>
+
+</body>
+</html>
