@@ -201,8 +201,10 @@ def match_markets(pin_rows, soft_moneylines):
         "soft_moneyline_scope": len(soft_moneylines),
         "pin_moneyline_scope": len(pin_mls),
         "title_parse_fail": 0,
+        "unknown_league": 0,
         "no_candidate": 0,
         "time_out_of_tolerance": 0,
+        "name_postcheck_failed": 0,
         "matched": 0,
         "ambiguous_resolved": 0,
         "by_book": {},
@@ -212,7 +214,8 @@ def match_markets(pin_rows, soft_moneylines):
         d = stats["by_book"].setdefault(
             book,
             {"total": 0, "matched": 0, "title_parse_fail": 0,
-             "no_candidate": 0, "time_out_of_tolerance": 0},
+             "unknown_league": 0, "no_candidate": 0,
+             "time_out_of_tolerance": 0, "name_postcheck_failed": 0},
         )
         d[bucket] = d.get(bucket, 0) + 1
 
@@ -229,25 +232,39 @@ def match_markets(pin_rows, soft_moneylines):
         k_t1, k_t2 = parsed
 
         ks_anchor, tolerance_sec = _anchor_for(nm)
-        # Sport gate from the soft-book's league hint. None = unknown league
-        # (preserves prior behavior for adapters/series that don't supply one).
+        # Sport gate from the soft-book's league hint. None means the league
+        # is unregistered in adapters/common.SERIES_TICKER_LEAGUE_PREFIXES or
+        # has no Pinnacle sport mapping. Fail closed: without a sport gate,
+        # fuzzy_match cheerfully pairs "Minnesota" (Kalshi MLS) with
+        # "Minnesota Wild" (Pinnacle NHL), which happened on 2026-04-22.
         expected_sport = pin_sport_for_league(nm.league)
+        if expected_sport is None:
+            stats["unknown_league"] += 1
+            bump_book(nm.book, "unknown_league")
+            unmatched_soft.append(UnmatchedSoft(soft=nm, reason="unknown_league"))
+            continue
         # Same-sport collision gate: require both Pinnacle participants to be
-        # in the league's team allowlist (closes the NHL-vs-AHL hole that the
-        # sport filter alone misses). None = no allowlist for this league
-        # (NCAA, etc.) -> skip this gate.
+        # in the league's team allowlist (closes the NHL-vs-AHL and
+        # MLS-vs-LigaMX holes that the sport filter alone misses). None = no
+        # allowlist registered for this league -> skip this gate (looser but
+        # sport-safe).
         allowlist = league_team_allowlist(nm.league)
 
         candidates = []
         for pin, p_a, p_b in pin_indexed:
-            if expected_sport is not None and pin.get("sport") != expected_sport:
+            if pin.get("sport") != expected_sport:
                 continue
             if allowlist is not None and not (
                 team_in_league(p_a, allowlist) and team_in_league(p_b, allowlist)
             ):
                 continue
-            if ((fuzzy_match(k_t1, p_a) and fuzzy_match(k_t2, p_b))
-                    or (fuzzy_match(k_t1, p_b) and fuzzy_match(k_t2, p_a))):
+            orient_1 = fuzzy_match(k_t1, p_a) and fuzzy_match(k_t2, p_b)
+            orient_2 = fuzzy_match(k_t1, p_b) and fuzzy_match(k_t2, p_a)
+            # Symmetric ambiguity (both orientations fit) means the soft-book
+            # tokens are too generic to pick a side. Skip rather than guess.
+            if orient_1 and orient_2:
+                continue
+            if orient_1 or orient_2:
                 pin_start = parse_iso(pin.get("startTime"))
                 if ks_anchor and pin_start:
                     delta = abs((ks_anchor - pin_start).total_seconds())
@@ -473,11 +490,19 @@ def _ml_match_to_pair(m):
     yes_designation = None
     yes_label = None
     if yes_sub:
-        for name, des in ((p_home, "home"), (p_away, "away")):
-            if fuzzy_match(yes_sub, name) or yes_sub.lower() == name.lower():
-                yes_designation = des
-                yes_label = name
-                break
+        home_match = (fuzzy_match(yes_sub, p_home)
+                      or yes_sub.lower() == p_home.lower())
+        away_match = (fuzzy_match(yes_sub, p_away)
+                      or yes_sub.lower() == p_away.lower())
+        if home_match and away_match:
+            # Ambiguous: yes_sub matches both participants (e.g., the sub was
+            # just "Dallas" on a hypothetical "Dallas X vs Dallas Y"). Drop
+            # rather than silently pick home.
+            return None
+        if home_match:
+            yes_designation, yes_label = "home", p_home
+        elif away_match:
+            yes_designation, yes_label = "away", p_away
         if yes_designation is None:
             adapter = adapter_for(nm.book)
             parsed = adapter.parse_moneyline_teams(nm)

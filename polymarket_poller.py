@@ -17,7 +17,6 @@ Output:
 Run: python3 polymarket_poller.py
 Stop: Ctrl-C or SIGTERM
 """
-import json
 import os
 import signal
 import time
@@ -26,6 +25,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 import requests
+
+from data_utils import atomic_write_jsonl, make_logger, prune_snapshots
 
 GATEWAY = "https://gateway.polymarket.us"
 LEAGUES = ("nba", "nhl", "mlb", "nfl", "wnba", "ncaaf", "ncaab")
@@ -48,26 +49,7 @@ LOG_PATH = os.path.join(DATA_DIR, "polymarket.log")
 PID_PATH = os.path.join(DATA_DIR, "polymarket.pid")
 
 
-def _log(msg):
-    line = f"[{datetime.now(timezone.utc).isoformat()}] {msg}"
-    print(line, flush=True)
-    try:
-        with open(LOG_PATH, "a") as f:
-            f.write(line + "\n")
-    except OSError:
-        pass
-
-
-def prune_snapshots(dir_path, keep_n):
-    try:
-        names = sorted(n for n in os.listdir(dir_path) if n.endswith(".jsonl"))
-    except OSError:
-        return
-    for stale in names[:-keep_n] if keep_n > 0 else names:
-        try:
-            os.remove(os.path.join(dir_path, stale))
-        except OSError:
-            pass
+_log = make_logger(LOG_PATH)
 
 
 def fetch_league_events(league):
@@ -164,9 +146,9 @@ def snapshot_once():
     os.makedirs(SNAPSHOT_DIR, exist_ok=True)
     fname = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + ".jsonl"
     path = os.path.join(SNAPSHOT_DIR, fname)
-    with open(path, "w") as f:
-        for r in rows:
-            f.write(json.dumps(r, separators=(",", ":")) + "\n")
+    atomic_write_jsonl(
+        path, rows, dumps_kwargs={"separators": (",", ":")}, logger=_log
+    )
 
     prune_snapshots(SNAPSHOT_DIR, SNAPSHOT_RETENTION)
     dt = time.time() - start

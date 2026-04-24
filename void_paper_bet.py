@@ -24,6 +24,7 @@ so the in-memory state matches the on-disk record:
     systemctl restart ev-dashboard
 """
 import argparse
+import fcntl
 import json
 import os
 import sys
@@ -62,7 +63,9 @@ def _record_key(record):
 
 def main():
     ap = argparse.ArgumentParser(description="Void open paper-tracker positions.")
-    ap.add_argument("market_ids", nargs="+", help="Market IDs to void.")
+    ap.add_argument("market_ids", nargs="*", help="Market IDs to void.")
+    ap.add_argument("--all-open", action="store_true",
+                    help="Void every currently-open (unsettled) position.")
     ap.add_argument("--book", default=None,
                     help="Restrict matching to this book (default: any book).")
     ap.add_argument("--reason", default="cross_league_mismatch",
@@ -70,6 +73,9 @@ def main():
     ap.add_argument("--dry-run", action="store_true",
                     help="Show what would be voided without writing.")
     args = ap.parse_args()
+
+    if not args.market_ids and not args.all_open:
+        ap.error("provide market_ids or --all-open")
 
     trades = _read_jsonl(TRADES_PATH)
     settlements = _read_jsonl(SETTLEMENTS_PATH)
@@ -85,6 +91,15 @@ def main():
     targets = []
     missing = []
     already_settled = []
+
+    if args.all_open:
+        for k, placement in by_key.items():
+            if k in settled_keys:
+                continue
+            if args.book and (placement.get("book") or "kalshi") != args.book:
+                continue
+            targets.append(placement)
+
     for mid in args.market_ids:
         if args.book:
             k = _key(args.book, mid)
@@ -156,6 +171,9 @@ def main():
 
     os.makedirs(os.path.dirname(SETTLEMENTS_PATH), exist_ok=True)
     with open(SETTLEMENTS_PATH, "a") as f:
+        # Cross-process exclusive lock so a concurrent paper_tracker settlement
+        # tick can't interleave writes with this void batch.
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
         for r in rows:
             f.write(json.dumps(r) + "\n")
 

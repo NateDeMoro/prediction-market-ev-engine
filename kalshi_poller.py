@@ -19,12 +19,20 @@ Stop: Ctrl-C or SIGTERM
 import json
 import os
 import re
-import signal
 import time
 import hashlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 import requests
+
+from data_utils import (
+    RunFlag,
+    atomic_write_jsonl,
+    install_shutdown_handlers,
+    make_logger,
+    prune_snapshots,
+    sleep_until_next_cycle,
+)
 
 BASE = "https://api.elections.kalshi.com/trade-api/v2"
 
@@ -35,32 +43,20 @@ REQUEST_TIMEOUT = 15
 MAX_WORKERS = 3             # Kalshi unauth limit is ~2 req/sec; keep pool small
 RATE_LIMIT_RETRIES = 4
 RATE_LIMIT_BACKOFF_SEC = 2.0
-# Series with no in-window markets for this many consecutive cycles are skipped
-# until the next series refresh.
+# Series with no in-window markets for this many consecutive cycles become
+# cold. Cold series are only re-polled every DEAD_SERIES_RETRY_AFTER cycles
+# to avoid wasting request budget, but are never fully frozen until the 1h
+# series refresh — so a series that starts publishing mid-hour recovers
+# within ~DEAD_SERIES_RETRY_AFTER*interval seconds instead of waiting up to
+# an hour for the next refresh.
 DEAD_SERIES_SKIP_AFTER = 3
+DEAD_SERIES_RETRY_AFTER = 5
 SNAPSHOT_RETENTION = 60  # keep the N most recent snapshots (≈ last hour)
 
 DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(DIR, "data")
 SNAPSHOT_DIR = os.path.join(DATA_DIR, "kalshi_snapshots")
 LOG_PATH = os.path.join(DATA_DIR, "kalshi.log")
-
-
-def prune_snapshots(dir_path, keep_n):
-    """Delete all but the `keep_n` most recent *.jsonl files under dir_path.
-
-    Names sort chronologically (timestamp-prefixed), so filename order is
-    a safe proxy for recency.
-    """
-    try:
-        names = sorted(n for n in os.listdir(dir_path) if n.endswith(".jsonl"))
-    except OSError:
-        return
-    for stale in names[:-keep_n] if keep_n > 0 else names:
-        try:
-            os.remove(os.path.join(dir_path, stale))
-        except OSError:
-            pass
 
 # Core head-to-head / spread / total / moneyline series.
 # Anything ending in GAME, SPREAD, TOTAL, or ML is a primary line market
@@ -93,18 +89,8 @@ HEADERS = {
     "Accept": "application/json",
 }
 
-_running = True
-
-
-def log(msg):
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    line = f"[{ts}] {msg}"
-    print(line, flush=True)
-    try:
-        with open(LOG_PATH, "a") as f:
-            f.write(line + "\n")
-    except OSError:
-        pass
+_running = RunFlag()
+log = make_logger(LOG_PATH)
 
 
 _session = requests.Session()
@@ -195,13 +181,22 @@ def format_change(market, old_fp):
     return f"{tag} {t} [{title}] {yes_side}: yes {yb}/{ya} no {nb}/{na}"
 
 
-def handle_signal(signum, frame):
-    global _running
-    _running = False
-    log("shutdown signal received, exiting after current cycle")
+def _should_poll(ticker, cycle_num, dead_counts, last_poll_cycle):
+    """Decide whether to fetch a series this cycle.
+
+    - Warm series (dead_counts < SKIP_AFTER): always poll.
+    - Cold series: poll every DEAD_SERIES_RETRY_AFTER cycles so a newly-
+      publishing series recovers within minutes instead of waiting for the
+      hourly full-series refresh.
+    """
+    dc = dead_counts.get(ticker, 0)
+    if dc < DEAD_SERIES_SKIP_AFTER:
+        return True
+    last = last_poll_cycle.get(ticker, 0)
+    return (cycle_num - last) >= DEAD_SERIES_RETRY_AFTER
 
 
-def run_cycle(prev_fps, core_series, dead_counts):
+def run_cycle(prev_fps, core_series, dead_counts, last_poll_cycle, cycle_num):
     now = datetime.now(timezone.utc)
     horizon = now + timedelta(hours=WINDOW_HOURS)
 
@@ -212,8 +207,10 @@ def run_cycle(prev_fps, core_series, dead_counts):
     series_with_hits = 0
     snapshot = []
 
-    # Skip series that have been empty for DEAD_SERIES_SKIP_AFTER consecutive cycles.
-    live_series = [s for s in core_series if dead_counts.get(s["ticker"], 0) < DEAD_SERIES_SKIP_AFTER]
+    live_series = [
+        s for s in core_series
+        if _should_poll(s["ticker"], cycle_num, dead_counts, last_poll_cycle)
+    ]
 
     def fetch(s):
         try:
@@ -259,6 +256,7 @@ def run_cycle(prev_fps, core_series, dead_counts):
                     "liquidity_dollars": m.get("liquidity_dollars"),
                     "status": m.get("status"),
                 })
+            last_poll_cycle[stick] = cycle_num
             if hit:
                 series_with_hits += 1
                 dead_counts[stick] = 0
@@ -267,12 +265,9 @@ def run_cycle(prev_fps, core_series, dead_counts):
 
     if snapshot:
         path = os.path.join(SNAPSHOT_DIR, now.strftime("%Y%m%dT%H%M%SZ") + ".jsonl")
-        try:
-            with open(path, "w") as f:
-                for row in snapshot:
-                    f.write(json.dumps(row, default=str) + "\n")
-        except OSError as e:
-            log(f"  ! snapshot write failed: {e}")
+        atomic_write_jsonl(
+            path, snapshot, dumps_kwargs={"default": str}, logger=log
+        )
         prune_snapshots(SNAPSHOT_DIR, SNAPSHOT_RETENTION)
 
     return new_fps, {
@@ -287,8 +282,7 @@ def run_cycle(prev_fps, core_series, dead_counts):
 
 def main():
     os.makedirs(SNAPSHOT_DIR, exist_ok=True)
-    signal.signal(signal.SIGTERM, handle_signal)
-    signal.signal(signal.SIGINT, handle_signal)
+    install_shutdown_handlers(_running, logger=log)
 
     log(
         f"kalshi poller starting: window={WINDOW_HOURS}h interval={POLL_INTERVAL_SEC}s "
@@ -305,6 +299,7 @@ def main():
 
     prev_fps = {}
     dead_counts = {}
+    last_poll_cycle = {}
     cycle = 0
     while _running:
         cycle += 1
@@ -315,12 +310,15 @@ def main():
                 core_series = fetch_core_sports_series()
                 series_loaded_at = t0
                 dead_counts.clear()  # give all series another chance
+                last_poll_cycle.clear()
                 log(f"refreshed sports series list: {len(core_series)} entries")
             except requests.RequestException as e:
                 log(f"series refresh failed (keeping old list): {e}")
 
         try:
-            prev_fps, stats = run_cycle(prev_fps, core_series, dead_counts)
+            prev_fps, stats = run_cycle(
+                prev_fps, core_series, dead_counts, last_poll_cycle, cycle
+            )
             elapsed = time.time() - t0
             log(
                 f"cycle {cycle} ok: series={stats['core_series']} "
@@ -333,10 +331,7 @@ def main():
         except Exception as e:
             log(f"cycle {cycle} FAILED: {type(e).__name__}: {e}")
 
-        sleep_for = max(1, POLL_INTERVAL_SEC - (time.time() - t0))
-        end = time.time() + sleep_for
-        while _running and time.time() < end:
-            time.sleep(min(1.0, end - time.time()))
+        sleep_until_next_cycle(t0, POLL_INTERVAL_SEC, _running)
 
     log("kalshi poller stopped cleanly")
 

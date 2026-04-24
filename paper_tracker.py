@@ -26,6 +26,7 @@ Public API:
   start_settlement_thread()      -> Thread
   snapshot()                     -> dict for /api/paper
 """
+import fcntl
 import json
 import math
 import os
@@ -36,10 +37,18 @@ from datetime import datetime, timezone
 
 from adapters import adapter_for
 from adapters.common import fuzzy_match
+from devig_utils import devig_multiplicative
 
 INITIAL_BANKROLL = 5000.0
 KELLY_FRACTION = 0.25
 MIN_EDGE_PCT = 2.0             # skip placement if expected_profit/stake < this
+# Sanity ceilings on edge. Realistic +EV on liquid soft books is < 15% for
+# team markets and < 25% for props — anything higher is almost certainly a
+# matcher mistake (wrong Pinnacle game, cross-sport cross-match, etc.).
+# These guard paper-tracker placement so ambient matcher bugs can't pollute
+# CLV; rejected rows are logged to data/sanity_rejected.jsonl for triage.
+SANITY_MAX_EDGE_PCT = float(os.getenv("SANITY_MAX_EDGE", "15.0"))
+SANITY_MAX_EDGE_PCT_PROP = float(os.getenv("SANITY_MAX_EDGE_PROP", "25.0"))
 # Player-prop edge gate is higher than team markets (Pinnacle's prop max-stake
 # is ~$250 vs $7.5k+ for team totals/MLs; quotes are noisier). Also gated by
 # INCLUDE_PROPS below so props stay out of paper trading until explicitly
@@ -62,6 +71,7 @@ DATA_DIR = os.path.join(DIR, "data")
 TRADES_PATH = os.path.join(DATA_DIR, "paper_trades.jsonl")
 SETTLEMENTS_PATH = os.path.join(DATA_DIR, "paper_settlements.jsonl")
 CLOSES_PATH = os.path.join(DATA_DIR, "paper_closes.jsonl")
+SANITY_REJECTED_PATH = os.path.join(DATA_DIR, "sanity_rejected.jsonl")
 PIN_SNAPSHOT_DIR = os.path.join(DATA_DIR, "snapshots")
 
 _lock = threading.Lock()
@@ -100,8 +110,12 @@ def _read_jsonl(path):
 
 
 def _append_jsonl(path, obj):
+    # fcntl.flock serializes concurrent appends across threads (and processes,
+    # e.g. void_paper_bet.py running while the settlement loop fires). Without
+    # this, interleaved writes can truncate/corrupt lines on the JSONL log.
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "a") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
         f.write(json.dumps(obj) + "\n")
 
 
@@ -294,6 +308,23 @@ def maybe_place(row, ladder, now=None):
     if edge_pct < min_edge:
         return None
 
+    max_edge = SANITY_MAX_EDGE_PCT_PROP if is_prop else SANITY_MAX_EDGE_PCT
+    if edge_pct > max_edge:
+        _append_jsonl(SANITY_REJECTED_PATH, {
+            "rejected_at": (now or datetime.now(timezone.utc)).isoformat(),
+            "book": book,
+            "market_id": market_id,
+            "pin_matchup": row.get("pin_matchup"),
+            "pin_sport": row.get("pin_sport"),
+            "market_type": row.get("market_type"),
+            "selection": row.get("selection"),
+            "fair_prob": row.get("fair_prob"),
+            "avg_fill_price": sized["avg_fill_price"],
+            "edge_pct": round(edge_pct, 4),
+            "reason": f"edge_pct>{max_edge} (likely matcher mismatch)",
+        })
+        return None
+
     when = (now or datetime.now(timezone.utc)).isoformat()
     record = {
         "placed_at": when,
@@ -351,17 +382,6 @@ def _parse_iso(s):
         return datetime.fromisoformat(str(s).replace("Z", "+00:00"))
     except (ValueError, AttributeError):
         return None
-
-
-def _american_to_decimal(a):
-    a = float(a)
-    return 1.0 + (a / 100.0 if a > 0 else 100.0 / -a)
-
-
-def _devig_multiplicative(prices):
-    probs = [1.0 / _american_to_decimal(p) for p in prices]
-    total = sum(probs)
-    return [p / total for p in probs]
 
 
 def _load_latest_pin_snapshot():
@@ -496,9 +516,12 @@ def _capture_close_for(record, pin_rows, now):
         return None
     yes_px, opp_px = found
     try:
-        yes_fair, _ = _devig_multiplicative([yes_px, opp_px])
+        devigged = devig_multiplicative([yes_px, opp_px])
     except (ValueError, ZeroDivisionError):
         return None
+    if devigged is None:
+        return None
+    yes_fair, _ = devigged
 
     close = {
         "captured_at": now.isoformat(),
@@ -600,8 +623,14 @@ def _settle_one(record):
         gross_return = 0.0
         net_pnl = -total_stake
 
+    key = _key(book, market_id)
     global _bankroll
     with _lock:
+        # Atomic idempotency: pop before writing so a concurrent settle (another
+        # poll tick, or void_paper_bet.py) returns early instead of double-
+        # crediting the bankroll and appending a duplicate settlement row.
+        if _open_positions.pop(key, None) is None:
+            return None
         _bankroll += net_pnl
         settlement = {
             "settled_at": datetime.now(timezone.utc).isoformat(),
@@ -626,7 +655,7 @@ def _settle_one(record):
             "net_pnl": round(net_pnl, 4),
             "bankroll_after": round(_bankroll, 4),
         }
-        close = _closes_by_key.get(_key(book, market_id))
+        close = _closes_by_key.get(key)
         if close is not None:
             fpc = close.get("fair_prob_close")
             settlement["fair_prob_close"] = fpc
@@ -634,8 +663,6 @@ def _settle_one(record):
                 settlement["clv"] = round(fpc - avg_fill, 6)
         _append_jsonl(SETTLEMENTS_PATH, settlement)
         _settled_records.append(settlement)
-        key = _key(book, market_id)
-        _open_positions.pop(key, None)
 
     return settlement
 
@@ -682,9 +709,13 @@ def snapshot():
     settled_pnl = sum(s.get("net_pnl", 0.0) for s in settled)
     roi_pct = (settled_pnl / settled_stake * 100) if settled_stake > 0 else 0.0
     hit_rate = (wins / total_settled * 100) if total_settled else 0.0
-    # Sum of modeled expected profit across every placement, regardless
-    # of outcome. Drifts vs. realized P&L measure calibration.
-    net_ev = round(sum(p.get("expected_profit", 0.0) for p in _placements), 4)
+    # Modeled expected profit, credited only when a bet settles. Voids
+    # never contribute, so voiding an open bet zeros out its EV.
+    net_ev = round(
+        sum(s.get("expected_profit", 0.0) or 0.0
+            for s in settled if s.get("result") != "void"),
+        4,
+    )
 
     clv_vals = [s["clv"] for s in settled if isinstance(s.get("clv"), (int, float))]
     avg_clv = round(sum(clv_vals) / len(clv_vals), 6) if clv_vals else None

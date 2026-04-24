@@ -137,19 +137,58 @@ def resolve_team_abbrev(abbrev, league):
     return TEAM_ABBREV_BY_LEAGUE.get(league, {}).get(abbrev)
 
 
-# Kalshi series-ticker prefix -> league. Matches the per-game-prop allowlist
-# in kalshi_poller.PER_GAME_PROP_SERIES.
+# Kalshi series-ticker prefix -> league. Every prefix a soft-book poller
+# publishes must be registered here: the matcher now fails closed on
+# unknown leagues (see market_matcher._unknown_league_skip). Order matters
+# only for collisions, which none of the current prefixes share (KXMLS is
+# distinct from KXMLB under startswith).
 SERIES_TICKER_LEAGUE_PREFIXES = (
+    # US majors
     ("KXNBA", "NBA"),
     ("KXNHL", "NHL"),
     ("KXNFL", "NFL"),
     ("KXMLB", "MLB"),
+    # Soccer — Pinnacle groups all of these under sport="Soccer".
+    ("KXMLS", "MLS"),
+    ("KXLIGAMX", "LIGAMX"),
+    ("KXLALIGA", "LALIGA"),
+    ("KXALLSVENSKAN", "ALLSVENSKAN"),
+    ("KXCOPADOBRASIL", "COPADOBRASIL"),
+    ("KXUAEPL", "UAEPL"),
+    ("KXDIMAYOR", "DIMAYOR"),
+    ("KXISL", "ISL"),
+    ("KXEREDIVISIE", "EREDIVISIE"),
+    ("KXSAUDIPL", "SAUDIPL"),
+    ("KXDFBPOKAL", "DFBPOKAL"),
+    ("KXECULP", "ECULP"),
+    ("KXBELGIANPL", "BELGIANPL"),
+    ("KXLIGAPORTUGAL", "LIGAPORTUGAL"),
+    ("KXUSL", "USL"),
+    ("KXARGPREMDIV", "ARGPREMDIV"),
+    ("KXBOLPDIV", "BOLPDIV"),
+    ("KXTACAPORT", "TACAPORT"),
+    ("KXPERLIGA1", "PERLIGA1"),
+    ("KXEGYPL", "EGYPL"),
+    ("KXDENSUPERLIGA", "DENSUPERLIGA"),
+    ("KXEPL", "EPL"),
+    ("KXBALLERLEAGUE", "BALLERLEAGUE"),
+    # Non-soccer internationals. Each has a distinct Pinnacle sport bucket
+    # with no same-sport collisions against a registered league's allowlist
+    # (MLB's allowlist excludes NPB/KBO clubs, so falling through to
+    # no-allowlist Baseball matching on NPB/KBO tickers is safe). `KXPGA`
+    # covers both `KXPGAH2H` and any future PGA suffix; `KXIPL` covers
+    # `KXIPLGAME` + `KXIPLTEAMTOTAL`.
+    ("KXNPB", "NPB"),
+    ("KXKBO", "KBO"),
+    ("KXPGA", "PGA"),
+    ("KXAFL", "AFL"),
+    ("KXIPL", "IPL"),
 )
 
 
 def series_ticker_league(series_ticker):
     """League inferred from a Kalshi series ticker prefix. Returns None if
-    unknown (caller should skip — matcher scope is NBA + NHL for now)."""
+    unknown. The matcher treats None as fail-closed (no match attempted)."""
     if not series_ticker:
         return None
     for prefix, league in SERIES_TICKER_LEAGUE_PREFIXES:
@@ -172,6 +211,41 @@ LEAGUE_TO_PIN_SPORT = {
     "MLB":   "Baseball",
     "NFL":   "Football",
     "NCAAF": "Football",
+    # Soccer leagues — Pinnacle exposes all as sport="Soccer". Within-sport
+    # cross-league collisions (e.g. Liga MX "Dallas" ~= MLS "FC Dallas") are
+    # addressed by the per-league team allowlist below.
+    "MLS":            "Soccer",
+    "LIGAMX":         "Soccer",
+    "LALIGA":         "Soccer",
+    "ALLSVENSKAN":    "Soccer",
+    "COPADOBRASIL":   "Soccer",
+    "UAEPL":          "Soccer",
+    "DIMAYOR":        "Soccer",
+    "ISL":            "Soccer",
+    "EREDIVISIE":     "Soccer",
+    "SAUDIPL":        "Soccer",
+    "DFBPOKAL":       "Soccer",
+    "ECULP":          "Soccer",
+    "BELGIANPL":      "Soccer",
+    "LIGAPORTUGAL":   "Soccer",
+    "USL":            "Soccer",
+    "ARGPREMDIV":     "Soccer",
+    "BOLPDIV":        "Soccer",
+    "TACAPORT":       "Soccer",
+    "PERLIGA1":       "Soccer",
+    "EGYPL":          "Soccer",
+    "DENSUPERLIGA":   "Soccer",
+    "EPL":            "Soccer",
+    "BALLERLEAGUE":   "Soccer",
+    # Non-soccer internationals. No within-sport collisions against a
+    # registered allowlisted league: MLB's allowlist excludes Japanese/Korean
+    # clubs, and Golf / Australian Rules Football / Cricket are each their
+    # own Pinnacle sport bucket.
+    "NPB": "Baseball",
+    "KBO": "Baseball",
+    "PGA": "Golf",
+    "AFL": "Australian Rules Football",
+    "IPL": "Cricket",
 }
 
 
@@ -221,13 +295,40 @@ _WNBA_TEAMS = frozenset({
     "Los Angeles Sparks", "Minnesota Lynx", "New York Liberty",
     "Phoenix Mercury", "Seattle Storm", "Washington Mystics",
 })
+# Soccer allowlists. Pinnacle's sport gate alone treats MLS/Liga MX/La Liga
+# as one bucket (sport="Soccer"), so "Dallas" in a Kalshi MLS ticker can
+# still fuzzy-match Liga MX "Dallas"-something. Allowlists per active soccer
+# league re-tighten the gate. Maintained by hand; only includes leagues we've
+# actually seen produce matches. Unregistered soccer leagues fall back to
+# sport-only gating (looser but still cross-sport-safe).
+_MLS_TEAMS = frozenset({
+    "Atlanta United", "Austin FC", "Charlotte FC", "Chicago Fire",
+    "Colorado Rapids", "Columbus Crew", "DC United", "FC Cincinnati",
+    "FC Dallas", "Houston Dynamo", "Inter Miami", "LA Galaxy",
+    "Los Angeles FC", "Minnesota United", "Montreal Impact", "CF Montreal",
+    "Nashville SC", "New England Revolution", "New York City FC",
+    "New York Red Bulls", "Orlando City", "Philadelphia Union",
+    "Portland Timbers", "Real Salt Lake", "San Jose Earthquakes",
+    "San Diego FC", "Seattle Sounders", "Sporting Kansas City",
+    "St. Louis City", "Toronto FC", "Vancouver Whitecaps",
+})
+_LIGAMX_TEAMS = frozenset({
+    "America", "Club America", "Atlas", "Atletico San Luis", "Cruz Azul",
+    "Guadalajara", "Chivas Guadalajara", "Juarez", "FC Juarez",
+    "Leon", "Club Leon", "Mazatlan", "Monterrey", "Necaxa",
+    "Pachuca", "Puebla", "Pumas UNAM", "Pumas", "Queretaro",
+    "Santos Laguna", "Tigres UANL", "Tigres", "Tijuana", "Club Tijuana",
+    "Toluca", "Deportivo Toluca", "UNAM", "UANL",
+})
 
 LEAGUE_TEAM_ALLOWLIST = {
-    "NBA":  _NBA_TEAMS,
-    "WNBA": _WNBA_TEAMS,
-    "NHL":  _NHL_TEAMS,
-    "MLB":  _MLB_TEAMS,
-    "NFL":  _NFL_TEAMS,
+    "NBA":    _NBA_TEAMS,
+    "WNBA":   _WNBA_TEAMS,
+    "NHL":    _NHL_TEAMS,
+    "MLB":    _MLB_TEAMS,
+    "NFL":    _NFL_TEAMS,
+    "MLS":    _MLS_TEAMS,
+    "LIGAMX": _LIGAMX_TEAMS,
 }
 
 

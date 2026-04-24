@@ -116,6 +116,14 @@ def scan_once():
         # easily fakes out a +1-2% "edge". See find_ev_bet.PROP_MIN_EDGE_PCT.
         if c["market_type"] == "player_prop" and ev_pct_on_stake < PROP_MIN_EDGE_PCT:
             continue
+        # Sanity ceiling: edges this large on liquid soft books are almost
+        # always a matcher mismatch (cross-sport, wrong game, etc.). Hide
+        # from the dashboard so bogus rows don't top the list.
+        is_prop = c["market_type"] == "player_prop"
+        max_edge = (paper_tracker.SANITY_MAX_EDGE_PCT_PROP if is_prop
+                    else paper_tracker.SANITY_MAX_EDGE_PCT)
+        if ev_pct_on_stake > max_edge:
+            continue
         vig_pct = (
             1 / american_to_decimal(c["yes_side_price"])
             + 1 / american_to_decimal(c["opposite_side_price"])

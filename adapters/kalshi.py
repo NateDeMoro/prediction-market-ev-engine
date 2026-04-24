@@ -313,8 +313,16 @@ def parse_moneyline_teams(normalized):
 
 
 def event_group_key(normalized):
-    """Group ML sibling with spread/total/team_total markets for the same game."""
-    return normalized.event_id or ""
+    """Group ML sibling with spread/total/team_total markets for the same game.
+
+    Namespaced by league because Kalshi reuses the same date+team suffix
+    across series (NHL `KXNHLGAME-26APR22DALMIN` and MLS `KXMLSGAME-26APR22DALMIN`
+    share `26APR22DALMIN`). Without the league prefix the ML matches overwrite
+    each other in market_matcher.event_to_pin, then non-ML markets inherit
+    whichever was written last — which produced cross-sport matches on 2026-04-22.
+    """
+    lg = normalized.league or "?"
+    return f"{lg}:{normalized.event_id or ''}"
 
 
 def fallback_anchor(normalized):

@@ -21,6 +21,7 @@ import time
 from datetime import datetime, timezone, timedelta
 
 from adapters import all_adapters, adapter_for
+from devig_utils import american_to_decimal, devig_multiplicative
 from market_matcher import match_all_markets, parse_iso
 
 DIR = os.path.dirname(os.path.abspath(__file__))
@@ -44,10 +45,6 @@ PROP_MIN_EDGE_PCT = float(os.getenv("PROP_MIN_EDGE", "4.0"))
 # Price helpers (book-agnostic)
 # ---------------------------------------------------------------------------
 
-def american_to_decimal(a):
-    return 1 + a / 100 if a >= 100 else 1 + 100 / abs(a)
-
-
 def price_to_american(price):
     """YES-share price in dollars (0<p<1) -> American odds int."""
     if price <= 0 or price >= 1:
@@ -68,14 +65,9 @@ def load_latest_snapshot(dir_path):
         return None, None
     path = files[-1]
     age = time.time() - os.path.getmtime(path)
-    rows = [json.loads(l) for l in open(path)]
+    with open(path) as f:
+        rows = [json.loads(l) for l in f]
     return rows, age
-
-
-def devig_multiplicative(american_prices):
-    probs = [1 / american_to_decimal(p) for p in american_prices]
-    total = sum(probs)
-    return [p / total for p in probs]
 
 
 # ---------------------------------------------------------------------------
@@ -195,9 +187,13 @@ def find_matches(pin_rows, soft_markets):
         if not in_window:
             stats["outside_start_window"] += 1
 
-        yes_fair, opp_fair = devig_multiplicative(
+        devigged = devig_multiplicative(
             [pair.yes_side_price, pair.opposite_side_price]
         )
+        if devigged is None:
+            stats["devig_failed"] = stats.get("devig_failed", 0) + 1
+            continue
+        yes_fair, opp_fair = devigged
 
         adapter = adapter_for(nm.book)
         candidates.append({

@@ -20,15 +20,29 @@ Stop: Ctrl-C (writes a final snapshot and exits cleanly)
 import json
 import os
 import re
-import sys
 import time
 import hashlib
-import signal
 from datetime import datetime, timezone, timedelta
 import requests
 
+from data_utils import (
+    RunFlag,
+    atomic_write_jsonl,
+    install_shutdown_handlers,
+    make_logger,
+    prune_snapshots,
+    sleep_until_next_cycle,
+)
+from devig_utils import american_to_decimal
+
 BASE = "https://guest.api.arcadia.pinnacle.com/0.1"
-API_KEY = "CmX2KcMrXuFmNg6YFbmTxE0y9CIrOi0R"
+API_KEY = os.environ.get("PINNACLE_API_KEY")
+if not API_KEY:
+    raise SystemExit(
+        "PINNACLE_API_KEY env var is required. Export it in your shell "
+        "(macOS: `launchctl setenv` or add to ~/.zshrc) or set it in the "
+        "systemd EnvironmentFile (.env) before starting the poller."
+    )
 
 POLL_INTERVAL_SEC = 60
 WINDOW_HOURS = 24            # include games up to 24h out
@@ -61,44 +75,8 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-_running = True
-
-
-def prune_snapshots(dir_path, keep_n):
-    """Delete all but the `keep_n` most recent *.jsonl files under dir_path.
-
-    Ordering is by filename (our timestamp prefix sorts chronologically), so
-    this is resilient to mtime skew if snapshots are ever copied between
-    machines.
-    """
-    try:
-        names = sorted(n for n in os.listdir(dir_path) if n.endswith(".jsonl"))
-    except OSError:
-        return
-    for stale in names[:-keep_n] if keep_n > 0 else names:
-        try:
-            os.remove(os.path.join(dir_path, stale))
-        except OSError:
-            pass
-
-
-def log(msg):
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    line = f"[{ts}] {msg}"
-    print(line, flush=True)
-    try:
-        with open(LOG_PATH, "a") as f:
-            f.write(line + "\n")
-    except OSError:
-        pass
-
-
-def american_to_decimal(a):
-    if a is None:
-        return None
-    if a >= 100:
-        return 1 + a / 100
-    return 1 + 100 / abs(a)
+_running = RunFlag()
+log = make_logger(LOG_PATH)
 
 
 def get(path, **params):
@@ -216,12 +194,6 @@ def format_price_change(market, matchup_name, old_fp):
         parts.append(f"{dsg}{suffix}={a:+d}[{d:.3f}]" if d else f"{dsg}{suffix}={a}")
     tag = "NEW" if old_fp is None else "CHG"
     return f"{tag} {matchup_name} p{period} {mtype}: " + " | ".join(parts)
-
-
-def handle_sigterm(signum, frame):
-    global _running
-    _running = False
-    log("shutdown signal received, exiting after current cycle")
 
 
 def matchup_participants(matchup):
@@ -460,12 +432,9 @@ def run_cycle(prev_fps):
         snap_path = os.path.join(
             SNAPSHOT_DIR, now.strftime("%Y%m%dT%H%M%SZ") + ".jsonl"
         )
-        try:
-            with open(snap_path, "w") as f:
-                for row in snapshot:
-                    f.write(json.dumps(row, default=str) + "\n")
-        except OSError as e:
-            log(f"  ! snapshot write failed: {e}")
+        atomic_write_jsonl(
+            snap_path, snapshot, dumps_kwargs={"default": str}, logger=log
+        )
         prune_snapshots(SNAPSHOT_DIR, SNAPSHOT_RETENTION)
 
     return new_fps, {
@@ -480,8 +449,7 @@ def run_cycle(prev_fps):
 
 def main():
     os.makedirs(SNAPSHOT_DIR, exist_ok=True)
-    signal.signal(signal.SIGTERM, handle_sigterm)
-    signal.signal(signal.SIGINT, handle_sigterm)
+    install_shutdown_handlers(_running, logger=log)
 
     log(
         f"poller starting: window=+{WINDOW_HOURS}h  live_lookback=-{LIVE_LOOKBACK_HOURS}h  "
@@ -504,10 +472,7 @@ def main():
         except Exception as e:
             log(f"cycle {cycle} FAILED: {type(e).__name__}: {e}")
 
-        sleep_for = max(1, POLL_INTERVAL_SEC - (time.time() - t0))
-        end = time.time() + sleep_for
-        while _running and time.time() < end:
-            time.sleep(min(1.0, end - time.time()))
+        sleep_until_next_cycle(t0, POLL_INTERVAL_SEC, _running)
 
     log("poller stopped cleanly")
 
