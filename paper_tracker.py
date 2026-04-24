@@ -119,6 +119,24 @@ def _append_jsonl(path, obj):
         f.write(json.dumps(obj) + "\n")
 
 
+def _expected_profit_at(record, fair_prob):
+    """Recompute expected_profit for a placement/settlement under a given fair
+    prob, using the same fee model as size_bet. Returns None if inputs are
+    missing or the adapter is unknown."""
+    avg_fill = record.get("avg_fill_price")
+    shares = record.get("shares")
+    book = record.get("book") or "kalshi"
+    if not isinstance(avg_fill, (int, float)) or not isinstance(shares, (int, float)):
+        return None
+    try:
+        adapter = adapter_for(book)
+    except Exception:
+        return None
+    fee = adapter.taker_fee_per_share(avg_fill, fair_prob)
+    ev_per_share = fair_prob * (1 - avg_fill) - (1 - fair_prob) * avg_fill - fee
+    return round(ev_per_share * shares, 4)
+
+
 def _replay_state():
     global _bankroll
     trades = _read_jsonl(TRADES_PATH)
@@ -165,6 +183,14 @@ def _replay_state():
         if key and key in _closes_by_key and s.get("fair_prob_close") is None:
             close = _closes_by_key[key]
             s["fair_prob_close"] = close.get("fair_prob_close")
+        # Recompute expected_profit using the closing fair prob when available.
+        # Settlements predating CLV capture keep their placement-time EV; edge_pct
+        # stays frozen at the placement value regardless.
+        fpc = s.get("fair_prob_close")
+        if isinstance(fpc, (int, float)):
+            recomputed = _expected_profit_at(s, fpc)
+            if recomputed is not None:
+                s["expected_profit"] = recomputed
         _settled_records.append(s)
         if key:
             _open_positions.pop(key, None)
@@ -661,6 +687,10 @@ def _settle_one(record):
             settlement["fair_prob_close"] = fpc
             if isinstance(avg_fill, (int, float)) and isinstance(fpc, (int, float)):
                 settlement["clv"] = round(fpc - avg_fill, 6)
+            if isinstance(fpc, (int, float)):
+                recomputed = _expected_profit_at(settlement, fpc)
+                if recomputed is not None:
+                    settlement["expected_profit"] = recomputed
         _append_jsonl(SETTLEMENTS_PATH, settlement)
         _settled_records.append(settlement)
 

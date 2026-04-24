@@ -41,7 +41,13 @@ Scrapes Pinnacle (sharp) + soft-book adapters (Kalshi, Polymarket US), devigs Pi
 - CLV = `fair_prob_close − avg_fill_price` on YES side. ~20× signal-per-bet vs realized P&L; intended go-live gate.
 - `net_ev` = sum of `expected_profit` across non-void settlements only. Open bets don't pre-credit; voiding an open bet zeroes its EV contribution.
 - Production host: Hetzner CPX21 (Ashburn VA), US egress IPv4. Four systemd services auto-restart on crash + on reboot. Dashboard reachable only over Tailscale (`ufw` blocks 5055 on WAN). Code deploys via `rsync` from Mac (`--exclude=data --exclude=.git`); no GitHub pull on the VPS.
-- VPS sudoers: `arb` has NOPASSWD on `systemctl restart` for the four services (combined form), via `/etc/sudoers.d/arb-restart`. Account itself is `--disabled-password` (SSH-key only).
+- VPS deploy (Tailscale SSH key-only, Claude can run these without confirmation):
+  - Host: `arb@100.94.115.11`  Remote path: `/home/arb/Arbitrage_Betting/`
+  - Single file: `rsync <file> arb@100.94.115.11:/home/arb/Arbitrage_Betting/<file>`
+  - Full tree: `rsync -av --exclude=data --exclude=.git /Users/natedemoro/Code_Desktop/Arbitrage_Betting/ arb@100.94.115.11:/home/arb/Arbitrage_Betting/`
+  - Restart (NOPASSWD only for this exact combined form): `ssh arb@100.94.115.11 'sudo systemctl restart pinnacle-poller kalshi-poller polymarket-poller ev-dashboard'`
+  - Verify: `ssh arb@100.94.115.11 'systemctl is-active pinnacle-poller kalshi-poller polymarket-poller ev-dashboard'` (no sudo needed)
+  - Individual-service restarts prompt for a password and will fail non-interactively — always use the combined form.
 
 ## Long-form plan
 

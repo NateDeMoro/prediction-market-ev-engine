@@ -21,7 +21,7 @@ DEFAULT_EDGE_PCT_BY_BUCKET = {
 @dataclass
 class SimConfig:
     initial_bankroll: float = 5000.0
-    num_bets: int = 1000           # bets per trial
+    num_bets: int = 10000         # bets per trial
     num_trials: int = 1000         # independent Monte Carlo trials
     kelly_fraction: float = 0.25
     # Parametric threshold schedule: min_edge_pct(p) = threshold_a + threshold_b / p.
