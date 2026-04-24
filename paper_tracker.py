@@ -37,11 +37,28 @@ from datetime import datetime, timezone
 
 from adapters import adapter_for
 from adapters.common import fuzzy_match
-from devig_utils import devig_multiplicative
+from devig_utils import devig_multiplicative, synthesize_combined_american
 
 INITIAL_BANKROLL = 5000.0
 KELLY_FRACTION = 0.25
-MIN_EDGE_PCT = 2.0             # skip placement if expected_profit/stake < this
+MIN_EDGE_PCT = 2.0             # per-book floor for edge_pct placement gate
+# Per-book price-aware threshold: min_edge_pct(px) = max(MIN_EDGE_PCT,
+# 100 * fee_rate * (1-px) + margin_pp). The BE term cancels the upfront
+# taker-fee drag (largest at low px); the margin covers calibration bias
+# and sizing noise. Kalshi margin chosen from threshold_sweep_kalshi.py
+# (BE+1.0pp gained +0.36% mean vs flat 2% with std 0.14% across 8 seeds).
+# Polymarket uses the same +1.0pp margin — sports fee is 0.03 × P × (1-P),
+# so the BE term is ~3/7 of Kalshi's; a book-specific sweep has not yet
+# validated whether a different margin is optimal. Books not listed here
+# fall through to the flat MIN_EDGE_PCT floor.
+PER_BOOK_FEE_RATE = {
+    "kalshi": 0.07,
+    "polymarket": 0.03,
+}
+PER_BOOK_EDGE_MARGIN_PP = {
+    "kalshi": 1.0,
+    "polymarket": 1.0,
+}
 # Sanity ceilings on edge. Realistic +EV on liquid soft books is < 15% for
 # team markets and < 25% for props — anything higher is almost certainly a
 # matcher mistake (wrong Pinnacle game, cross-sport cross-match, etc.).
@@ -75,7 +92,7 @@ SANITY_REJECTED_PATH = os.path.join(DATA_DIR, "sanity_rejected.jsonl")
 PIN_SNAPSHOT_DIR = os.path.join(DATA_DIR, "snapshots")
 
 _lock = threading.Lock()
-_placed_keys = set()       # f"{book}:{market_id}"
+_placed_keys = set()       # f"{book}:{market_id}:{side}"
 _open_positions = {}       # key -> placement record
 _settled_records = []
 _placements = []
@@ -83,14 +100,35 @@ _closes_by_key = {}        # key -> close record
 _bankroll = INITIAL_BANKROLL
 
 
-def _key(book, market_id):
-    return f"{book}:{market_id}"
+def _key(book, market_id, side="yes"):
+    """Dedupe key. Legacy two-part keys replay as side='yes'."""
+    return f"{book}:{market_id}:{side}"
+
+
+def _min_edge_pct(book, avg_fill_price, is_prop):
+    """Minimum edge_pct required to place a bet on this book at this fill price.
+
+    Falls back to the flat team/prop floor when the book has no calibrated
+    per-price schedule. For books that do (currently Kalshi), the threshold is
+    max(floor, 100 * fee_rate * (1-px) + margin_pp) — cancels the real upfront
+    taker-fee drag and adds a small safety margin for calibration bias.
+    """
+    floor = PROP_MIN_EDGE_PCT if is_prop else MIN_EDGE_PCT
+    rate = PER_BOOK_FEE_RATE.get(book)
+    margin = PER_BOOK_EDGE_MARGIN_PP.get(book)
+    if rate is None or margin is None or avg_fill_price is None:
+        return floor
+    be_plus_margin = 100.0 * rate * (1.0 - avg_fill_price) + margin
+    return max(floor, be_plus_margin)
 
 
 def _record_key(record):
     book = record.get("book") or "kalshi"
     mid = record.get("market_id") or record.get("ticker")
-    return _key(book, mid) if mid else None
+    if not mid:
+        return None
+    side = record.get("side") or "yes"
+    return _key(book, mid, side)
 
 
 def _read_jsonl(path):
@@ -303,7 +341,7 @@ def size_bet(ladder, fair_prob, bankroll, adapter):
 
 
 def maybe_place(row, ladder, now=None):
-    """Place a paper bet if row is in-window, (book, market_id) is new, Kelly > 0."""
+    """Place a paper bet if row is in-window, (book, market_id, side) is new, Kelly > 0."""
     if not row.get("in_window"):
         return None
     nm = row.get("market")
@@ -316,7 +354,8 @@ def maybe_place(row, ladder, now=None):
     is_prop = row.get("market_type") == "player_prop"
     if is_prop and not INCLUDE_PROPS:
         return None
-    key = _key(book, market_id)
+    side = row.get("side") or "yes"
+    key = _key(book, market_id, side)
 
     with _lock:
         if key in _placed_keys:
@@ -330,7 +369,7 @@ def maybe_place(row, ladder, now=None):
 
     edge_pct = (sized["expected_profit"] / sized["stake"] * 100.0
                 if sized["stake"] > 0 else 0.0)
-    min_edge = PROP_MIN_EDGE_PCT if is_prop else MIN_EDGE_PCT
+    min_edge = _min_edge_pct(book, sized["avg_fill_price"], is_prop)
     if edge_pct < min_edge:
         return None
 
@@ -340,6 +379,7 @@ def maybe_place(row, ladder, now=None):
             "rejected_at": (now or datetime.now(timezone.utc)).isoformat(),
             "book": book,
             "market_id": market_id,
+            "side": side,
             "pin_matchup": row.get("pin_matchup"),
             "pin_sport": row.get("pin_sport"),
             "market_type": row.get("market_type"),
@@ -356,6 +396,7 @@ def maybe_place(row, ladder, now=None):
         "placed_at": when,
         "book": book,
         "market_id": market_id,
+        "side": side,
         "pin_matchup": row.get("pin_matchup"),
         "pin_matchup_id": row.get("pin_matchup_id"),
         "pin_home_name": row.get("pin_home_name"),
@@ -462,6 +503,9 @@ def _find_pin_prices(pin_rows, record):
     team_side = _team_side_from_record(record) if mtype == "team_total" else None
     prop_matchup_id = record.get("prop_matchup_id") if mtype == "player_prop" else None
 
+    three_way_ml = (mtype == "moneyline"
+                    and isinstance(opp_d, str) and opp_d.startswith("not_"))
+
     for r in pin_rows:
         if r.get("matchupId") != matchup_id:
             continue
@@ -471,6 +515,27 @@ def _find_pin_prices(pin_rows, record):
             continue
         if mtype == "team_total" and team_side is not None and r.get("side") != team_side:
             continue
+
+        if three_way_ml:
+            # 3-way soccer ML: Pinnacle publishes home/away/draw; opposite was
+            # synthesized at placement as the combined NO of the other two.
+            # Recompute the synthesis here so CLV devig is internally consistent.
+            prices_r = r.get("prices") or []
+            if len(prices_r) != 3:
+                continue
+            three_way = {p.get("designation"): p.get("price") for p in prices_r
+                         if p.get("designation") in ("home", "away", "draw")}
+            if set(three_way.keys()) != {"home", "away", "draw"}:
+                continue
+            if yes_d not in three_way:
+                continue
+            yes_price = three_way[yes_d]
+            others = [three_way[k] for k in ("home", "away", "draw") if k != yes_d]
+            opp_price = synthesize_combined_american(others)
+            if yes_price is not None and opp_price is not None:
+                return yes_price, opp_price
+            continue
+
         if mtype == "player_prop":
             # Narrow by prop-child matchupId when we have one stored; else by
             # (canonical stat, line) against this record.
@@ -524,7 +589,8 @@ def _capture_close_for(record, pin_rows, now):
     market_id = record.get("market_id") or record.get("ticker")
     if not market_id:
         return None
-    key = _key(book, market_id)
+    side = record.get("side") or "yes"
+    key = _key(book, market_id, side)
     if key in _closes_by_key:
         return None
 
@@ -549,16 +615,21 @@ def _capture_close_for(record, pin_rows, now):
         return None
     yes_fair, _ = devigged
 
+    # Store fair_prob_close in the record's side-perspective so downstream
+    # CLV / fair-delta math reads directly, without branching on side.
+    fair_close_side = yes_fair if side == "yes" else round(1.0 - yes_fair, 6)
+
     close = {
         "captured_at": now.isoformat(),
         "book": book,
         "market_id": market_id,
+        "side": side,
         "pin_matchup": record.get("pin_matchup"),
         "pin_start_time": record.get("pin_start_time"),
         "market_type": record.get("market_type"),
         "period_label": record.get("period_label"),
         "line": record.get("line"),
-        "fair_prob_close": round(yes_fair, 6),
+        "fair_prob_close": round(fair_close_side, 6),
         "yes_side_price_close": yes_px,
         "opposite_side_price_close": opp_px,
         "minutes_before_start": round(dt_to_start / 60.0, 2),
@@ -628,6 +699,7 @@ def _settle_one(record):
     market_id = record.get("market_id") or record.get("ticker")
     if not market_id:
         return None
+    side = record.get("side") or "yes"
     adapter = adapter_for(book)
     try:
         result = adapter.fetch_settlement(market_id)
@@ -641,7 +713,10 @@ def _settle_one(record):
     avg_fill = record["avg_fill_price"]
     total_stake = record.get("stake", 0.0)
 
-    if result == "yes":
+    # NO contracts win when the underlying settles "no"; YES contracts win
+    # when it settles "yes". Winning contracts always pay $1/share minus fee.
+    won = (result == side)
+    if won:
         fee_on_win = adapter.fee_on_win_per_share(avg_fill)
         gross_return = shares * (1.0 - fee_on_win)
         net_pnl = gross_return - total_stake
@@ -649,7 +724,7 @@ def _settle_one(record):
         gross_return = 0.0
         net_pnl = -total_stake
 
-    key = _key(book, market_id)
+    key = _key(book, market_id, side)
     global _bankroll
     with _lock:
         # Atomic idempotency: pop before writing so a concurrent settle (another
@@ -662,6 +737,7 @@ def _settle_one(record):
             "settled_at": datetime.now(timezone.utc).isoformat(),
             "book": book,
             "market_id": market_id,
+            "side": side,
             "pin_matchup": record.get("pin_matchup"),
             "pin_sport": record.get("pin_sport"),
             "pin_start_time": record.get("pin_start_time"),
@@ -752,6 +828,13 @@ def snapshot():
     clv_positive = sum(1 for c in clv_vals if c > 0)
     clv_samples = len(clv_vals)
 
+    fair_deltas = [s["fair_prob_close"] - s["fair_prob"] for s in settled
+                   if isinstance(s.get("fair_prob_close"), (int, float))
+                   and isinstance(s.get("fair_prob"), (int, float))]
+    avg_fair_delta = round(sum(fair_deltas) / len(fair_deltas), 6) if fair_deltas else None
+    fair_delta_positive = sum(1 for d in fair_deltas if d > 0)
+    fair_delta_samples = len(fair_deltas)
+
     return {
         "bankroll": round(bankroll, 4),
         "initial_bankroll": INITIAL_BANKROLL,
@@ -771,5 +854,8 @@ def snapshot():
             "avg_clv": avg_clv,
             "clv_samples": clv_samples,
             "clv_positive": clv_positive,
+            "avg_fair_delta": avg_fair_delta,
+            "fair_delta_samples": fair_delta_samples,
+            "fair_delta_positive": fair_delta_positive,
         },
     }

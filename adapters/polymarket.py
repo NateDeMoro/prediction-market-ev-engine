@@ -12,9 +12,16 @@ markets, no team-totals, and no props. The adapter filters in
 `normalize_market` accordingly.
 
 Market-id convention: `"{market_slug}:{long|short}"`. Both sides of a
-Polymarket market share a single book endpoint keyed on the slug; the
-`long|short` suffix tells `fetch_yes_ask_ladder` which side to surface
-(offers[] for the long side, 1 - bids[] inverted for the short side).
+Polymarket market share a single book endpoint keyed on the slug; YES-ask
+on `{slug}:long` reads offers[] directly and YES-ask on `{slug}:short`
+reads `1 - bids[]`. The NO ladder for each market_id is derived from the
+opposite side of that same book (one API call surfaces both).
+
+Moneyline emission drops the short side so each Polymarket event yields
+one NormalizedMarket per market type — the sibling team is reachable via
+NO-side scanning rather than a duplicate market_id. Spread and total were
+already single-sided (favored / Over only), so NO-side is the only way to
+reach dog-spread / under-total exposure.
 """
 import os
 import re
@@ -24,6 +31,7 @@ import requests
 from .common import NormalizedMarket
 
 BOOK = "polymarket"
+SUPPORTS_NO_SIDE = True
 
 DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SNAPSHOT_DIR = os.path.join(DIR, "data", "polymarket_snapshots")
@@ -32,10 +40,12 @@ GATEWAY = "https://gateway.polymarket.us"
 HEADERS = {"User-Agent": "Mozilla/5.0 (ev-scanner)", "Accept": "application/json"}
 REQUEST_TIMEOUT = 10
 
-# Polymarket publishes `feeCoefficient: 0.05` on every sports market. We apply
-# the same model as Kalshi (5% of profit, paid only on winning fills) until a
-# real fill confirms whether Polymarket instead charges a curved notional fee.
-FEE_RATE = 0.05
+# Polymarket taker fee per the published schedule:
+#   fees = C * feeRate * P * (1-P)
+# Charged upfront at fill, independent of outcome. Sports rate = 0.03 (peaks at
+# $0.0075/share at P=0.5); crypto rate = 0.072 and is out-of-scope. Makers pay
+# zero and receive no rebate on sports.
+FEE_RATE = 0.03
 
 _TYPE_MAP = {
     "SPORTS_MARKET_TYPE_MONEYLINE": "moneyline",
@@ -146,6 +156,12 @@ def normalize_market(raw):
     if market_type == "moneyline":
         if not team:
             return None
+        # Emit only the long side: the short side would surface the sibling team
+        # at an identical price (same book, complemented), and SUPPORTS_NO_SIDE=True
+        # already reaches that team via the NO ladder. Dual emission would double-
+        # count every moneyline as four paper bets for two economic positions.
+        if not is_long:
+            return None
         return _nm(None, team, None)
 
     if market_type == "spread":
@@ -201,18 +217,24 @@ def market_url(normalized):
 
 
 def fee_on_win_per_share(price):
-    """Fee deducted from the winning payoff per share. 5% of profit, Kalshi-style."""
-    return FEE_RATE * (1.0 - price)
-
-
-def fee_on_stake_per_share(price):
-    """Fee paid upfront on stake per share. Zero — fees only on win."""
+    """Fee deducted from the winning payoff per share. Polymarket charges its
+    taker fee upfront at fill (see `fee_on_stake_per_share`), so winners collect
+    the full $1/contract — nothing is skimmed on settlement."""
     return 0.0
 
 
+def fee_on_stake_per_share(price):
+    """Taker fee paid upfront at fill per share: 0.03 * P * (1-P). Symmetric in
+    P, so the same formula applies to YES and NO buys (price = whatever the
+    trader pays per share on their side)."""
+    return FEE_RATE * price * (1.0 - price)
+
+
 def taker_fee_per_share(price, fair_prob):
-    """Expected per-share fee at the given fill price, given fair probability."""
-    return fair_prob * fee_on_win_per_share(price) + fee_on_stake_per_share(price)
+    """Expected per-share fee at the given fill price. Upfront fee is
+    deterministic (paid regardless of outcome), so `fair_prob` is unused —
+    kept in the signature for adapter-interface symmetry."""
+    return fee_on_stake_per_share(price)
 
 
 # ---------------------------------------------------------------------------
@@ -237,47 +259,97 @@ def _qty_to_int(qty):
         return None
 
 
-def fetch_yes_ask_ladder(market_id):
-    """Return ascending YES-ask ladder for one side of a Polymarket market.
-
-    The gateway's `/v1/markets/{slug}/book` returns a single book per market.
-    Bids are buys on the long side; offers are sells on the long side. YES-ask
-    on the long side is `offers[]` directly; YES-ask on the short side is
-    `1 - bids[].px` (selling long at bid = buying short at 1 - bid).
-    """
-    slug, side = _parse_market_id(market_id)
-    if not slug:
-        return []
+def _fetch_book(slug):
+    """Return the `marketData` subtree of `/v1/markets/{slug}/book`, one side
+    (long perspective). Bids are long-side buys; offers are long-side sells."""
     r = requests.get(f"{GATEWAY}/v1/markets/{slug}/book",
                      headers=HEADERS, timeout=REQUEST_TIMEOUT)
     r.raise_for_status()
     body = r.json()
-    data = body.get("marketData") or body
-    bids = data.get("bids") or []
-    offers = data.get("offers") or []
+    return body.get("marketData") or body
 
+
+def _long_ask_ladder(offers):
+    """Ascending long-side ask ladder parsed directly from offers[]."""
     ladder = []
-    if side == "long":
-        for entry in offers:
-            px = _px_to_float(entry.get("px"))
-            qty = _qty_to_int(entry.get("qty"))
-            if px is None or qty is None or qty <= 0:
-                continue
-            if px <= 0 or px >= 1:
-                continue
-            ladder.append((round(px, 4), qty))
-    else:
-        for entry in bids:
-            px = _px_to_float(entry.get("px"))
-            qty = _qty_to_int(entry.get("qty"))
-            if px is None or qty is None or qty <= 0:
-                continue
-            yes_ask = round(1.0 - px, 4)
-            if yes_ask <= 0 or yes_ask >= 1:
-                continue
-            ladder.append((yes_ask, qty))
+    for entry in offers:
+        px = _px_to_float(entry.get("px"))
+        qty = _qty_to_int(entry.get("qty"))
+        if px is None or qty is None or qty <= 0:
+            continue
+        if px <= 0 or px >= 1:
+            continue
+        ladder.append((round(px, 4), qty))
     ladder.sort(key=lambda x: x[0])
     return ladder
+
+
+def _short_ask_ladder(bids):
+    """Ascending short-side ask ladder derived from long-side bids (1 - px).
+
+    Selling long at bid P is economically identical to buying short at 1 - P,
+    so the long-bid book IS the short-ask book in complement space.
+    """
+    ladder = []
+    for entry in bids:
+        px = _px_to_float(entry.get("px"))
+        qty = _qty_to_int(entry.get("qty"))
+        if px is None or qty is None or qty <= 0:
+            continue
+        short_ask = round(1.0 - px, 4)
+        if short_ask <= 0 or short_ask >= 1:
+            continue
+        ladder.append((short_ask, qty))
+    ladder.sort(key=lambda x: x[0])
+    return ladder
+
+
+def fetch_yes_ask_ladder(market_id):
+    """Return ascending YES-ask ladder for one side of a Polymarket market.
+
+    YES-ask on `{slug}:long` is offers[] directly; YES-ask on `{slug}:short`
+    is `1 - bids[].px`.
+    """
+    slug, side = _parse_market_id(market_id)
+    if not slug:
+        return []
+    data = _fetch_book(slug)
+    if side == "long":
+        return _long_ask_ladder(data.get("offers") or [])
+    return _short_ask_ladder(data.get("bids") or [])
+
+
+def fetch_no_ask_ladder(market_id):
+    """Return ascending NO-ask ladder for one side of a Polymarket market.
+
+    The NO side of any market_id is the YES side of its sibling, derived from
+    the opposite half of the same orderbook: for `{slug}:long`, NO ≡ short-ask
+    ≡ `1 - bids[]`; for `{slug}:short`, NO ≡ long-ask ≡ offers[].
+    """
+    slug, side = _parse_market_id(market_id)
+    if not slug:
+        return []
+    data = _fetch_book(slug)
+    if side == "long":
+        return _short_ask_ladder(data.get("bids") or [])
+    return _long_ask_ladder(data.get("offers") or [])
+
+
+def fetch_both_ladders(market_id):
+    """Return (yes_ask_ladder, no_ask_ladder) parsed from one book call.
+
+    use when: the caller needs both sides (EV scanner, dashboard). Halves
+    traffic vs. calling `fetch_yes_ask_ladder` + `fetch_no_ask_ladder`.
+    """
+    slug, side = _parse_market_id(market_id)
+    if not slug:
+        return [], []
+    data = _fetch_book(slug)
+    offers = data.get("offers") or []
+    bids = data.get("bids") or []
+    if side == "long":
+        return _long_ask_ladder(offers), _short_ask_ladder(bids)
+    return _short_ask_ladder(bids), _long_ask_ladder(offers)
 
 
 def fetch_settlement(market_id):

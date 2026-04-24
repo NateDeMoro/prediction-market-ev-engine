@@ -41,3 +41,29 @@ def devig_multiplicative(american_prices):
     if total <= 0:
         return None
     return [p / total for p in probs]
+
+
+def synthesize_combined_american(american_prices):
+    """Collapse N American prices into one American price whose implied
+    probability equals the sum of inputs' implied probs.
+
+    Use when: flattening a 3-way market's "other two" legs into a synthetic
+    NO price so the existing 2-way devig yields the correct fair prob for
+    the YES leg (multiplicative devig on [yes, synthesized] equals full
+    3-way devig on [home, away, draw] for the YES outcome).
+
+    Returns None if any input is degenerate or the combined implied prob
+    is >= 1 (no finite American representation for a guaranteed outcome).
+    """
+    combined_prob = 0.0
+    for a in american_prices:
+        d = american_to_decimal(a)
+        if d is None or d <= 0:
+            return None
+        combined_prob += 1.0 / d
+    if combined_prob <= 0 or combined_prob >= 1:
+        return None
+    combined_decimal = 1.0 / combined_prob
+    if combined_decimal >= 2.0:
+        return int(round((combined_decimal - 1.0) * 100.0))
+    return int(round(-100.0 / (combined_decimal - 1.0)))

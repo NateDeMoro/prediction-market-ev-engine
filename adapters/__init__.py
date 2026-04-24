@@ -6,13 +6,19 @@ Each adapter module exposes a common duck-typed surface (see
 
     BOOK: str
     SNAPSHOT_DIR: str
+    SUPPORTS_NO_SIDE: bool  # True => fetch_both_ladders returns a NO ladder
     normalize_market(raw_row) -> NormalizedMarket | None
     fetch_yes_ask_ladder(market_id) -> list[(price_0_1, qty)]
+    fetch_both_ladders(market_id) -> (yes_ladder, no_ladder_or_None)
     taker_fee_per_share(price, fair_prob) -> float
     market_url(normalized) -> str
     fetch_settlement(market_id) -> "yes" | "no" | None
     parse_moneyline_teams(normalized) -> (team_a, team_b) | None
     event_group_key(normalized) -> str
+
+`fetch_both_ladders` returns both sides of a single ticker's book from one
+HTTP call. Adapters without a NO-side (Polymarket: separate market IDs per
+outcome) return (yes_ladder, None) so callers can branch.
 
 `adapter_for(book)` lazy-loads modules so individual adapters can be
 added without touching this file.

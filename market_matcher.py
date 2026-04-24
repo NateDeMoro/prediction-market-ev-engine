@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from adapters import adapter_for
+from devig_utils import synthesize_combined_american
 from adapters.common import (
     COMBO_STATS,
     NormalizedMarket,
@@ -465,24 +466,36 @@ def _find_team_total_prices(pin_markets, target_side, line):
     return None
 
 
-def _ml_match_to_pair(m):
-    """Convert a moneyline Match to a MatchedPair. Resolves YES -> home/away.
+_DRAW_LABELS = {"tie", "tied", "draw", "drawn"}
 
-    Returns None when YES cannot be resolved (historical `yes_side_unknown`
-    bucket) or for 3-way markets (deferred: Shin devig not yet implemented).
+
+def _ml_match_to_pair(m):
+    """Convert a moneyline Match to a MatchedPair. Resolves YES -> home/away/draw.
+
+    Handles both 2-way and 3-way (soccer) Pinnacle books. For 3-way, the
+    opposite side is synthesized from the union of the other two outcomes'
+    implied probabilities — keeping MatchedPair shape flat so downstream
+    2-way devig produces the correct fair prob for the YES leg.
+
+    Returns None when YES cannot be resolved (historical `yes_side_unknown`).
     """
     pin = m.pinnacle
     prices = pin.get("prices") or []
-    if len(prices) != 2:
+    n_prices = len(prices)
+    if n_prices not in (2, 3):
         return None
 
     by_des = {}
     for p in prices:
         d = p.get("designation")
-        if d in ("home", "away"):
+        if d in ("home", "away", "draw"):
             by_des[d] = p.get("price")
-    if len(by_des) != 2:
-        return None
+    if n_prices == 2:
+        if set(by_des.keys()) != {"home", "away"}:
+            return None
+    else:
+        if set(by_des.keys()) != {"home", "away", "draw"}:
+            return None
 
     nm = m.soft
     yes_sub = (nm.yes_sub_title or nm.team or "").strip()
@@ -490,40 +503,55 @@ def _ml_match_to_pair(m):
     yes_designation = None
     yes_label = None
     if yes_sub:
-        home_match = (fuzzy_match(yes_sub, p_home)
-                      or yes_sub.lower() == p_home.lower())
-        away_match = (fuzzy_match(yes_sub, p_away)
-                      or yes_sub.lower() == p_away.lower())
-        if home_match and away_match:
-            # Ambiguous: yes_sub matches both participants (e.g., the sub was
-            # just "Dallas" on a hypothetical "Dallas X vs Dallas Y"). Drop
-            # rather than silently pick home.
-            return None
-        if home_match:
-            yes_designation, yes_label = "home", p_home
-        elif away_match:
-            yes_designation, yes_label = "away", p_away
-        if yes_designation is None:
-            adapter = adapter_for(nm.book)
-            parsed = adapter.parse_moneyline_teams(nm)
-            if parsed:
-                k_t1, k_t2 = parsed
-                yes_title_team = None
-                if fuzzy_match(yes_sub, k_t1) or yes_sub.lower() == k_t1.lower():
-                    yes_title_team = k_t1
-                elif fuzzy_match(yes_sub, k_t2) or yes_sub.lower() == k_t2.lower():
-                    yes_title_team = k_t2
-                if yes_title_team:
-                    for name, des in ((p_home, "home"), (p_away, "away")):
-                        if fuzzy_match(yes_title_team, name):
-                            yes_designation = des
-                            yes_label = name
-                            break
+        if n_prices == 3 and yes_sub.lower() in _DRAW_LABELS:
+            yes_designation, yes_label = "draw", "Draw"
+        else:
+            home_match = (fuzzy_match(yes_sub, p_home)
+                          or yes_sub.lower() == p_home.lower())
+            away_match = (fuzzy_match(yes_sub, p_away)
+                          or yes_sub.lower() == p_away.lower())
+            if home_match and away_match:
+                # Ambiguous: yes_sub matches both participants (e.g., the sub
+                # was just "Dallas" on a hypothetical "Dallas X vs Dallas Y").
+                # Drop rather than silently pick home.
+                return None
+            if home_match:
+                yes_designation, yes_label = "home", p_home
+            elif away_match:
+                yes_designation, yes_label = "away", p_away
+            if yes_designation is None:
+                adapter = adapter_for(nm.book)
+                parsed = adapter.parse_moneyline_teams(nm)
+                if parsed:
+                    k_t1, k_t2 = parsed
+                    yes_title_team = None
+                    if fuzzy_match(yes_sub, k_t1) or yes_sub.lower() == k_t1.lower():
+                        yes_title_team = k_t1
+                    elif fuzzy_match(yes_sub, k_t2) or yes_sub.lower() == k_t2.lower():
+                        yes_title_team = k_t2
+                    if yes_title_team:
+                        for name, des in ((p_home, "home"), (p_away, "away")):
+                            if fuzzy_match(yes_title_team, name):
+                                yes_designation = des
+                                yes_label = name
+                                break
     if yes_designation is None:
         return None
 
-    opposite_designation = "away" if yes_designation == "home" else "home"
-    opposite_label = p_away if yes_designation == "home" else p_home
+    if n_prices == 2:
+        opposite_designation = "away" if yes_designation == "home" else "home"
+        opposite_label = p_away if yes_designation == "home" else p_home
+        yes_price = by_des[yes_designation]
+        opposite_price = by_des[opposite_designation]
+    else:
+        opposite_designation = f"not_{yes_designation}"
+        opposite_label = f"Not {yes_label}"
+        yes_price = by_des[yes_designation]
+        other_prices = [by_des[d] for d in ("home", "away", "draw")
+                        if d != yes_designation]
+        opposite_price = synthesize_combined_american(other_prices)
+        if opposite_price is None:
+            return None
 
     return MatchedPair(
         market=nm,
@@ -539,8 +567,8 @@ def _ml_match_to_pair(m):
         line=None,
         yes_side_label=yes_label,
         opposite_side_label=opposite_label,
-        yes_side_price=by_des[yes_designation],
-        opposite_side_price=by_des[opposite_designation],
+        yes_side_price=yes_price,
+        opposite_side_price=opposite_price,
         delta_seconds=m.delta_seconds,
         selection=yes_label,
         yes_designation=yes_designation,
@@ -813,13 +841,12 @@ def match_all_markets(pin_rows, soft_markets):
     for m in ml_report.matched:
         if len(m.pinnacle.get("prices") or []) == 3:
             ml_three_way += 1
-            continue
         pair = _ml_match_to_pair(m)
         if pair is None:
             ml_unresolved += 1
             continue
         ml_pairs.append(pair)
-    stats["moneyline_three_way_deferred"] = ml_three_way
+    stats["moneyline_three_way_matched"] = ml_three_way
     stats["moneyline_yes_side_unresolved"] = ml_unresolved
     stats["matched_by_type"]["moneyline"] = len(ml_pairs)
 

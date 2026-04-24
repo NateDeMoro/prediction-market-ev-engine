@@ -156,7 +156,7 @@ def find_matches(pin_rows, soft_markets):
         "matched_total": nonml_stats["matched_by_type"].get("total", 0),
         "matched_team_total": nonml_stats["matched_by_type"].get("team_total", 0),
         "matched_player_prop": nonml_stats["matched_by_type"].get("player_prop", 0),
-        "three_way_deferred": nonml_stats.get("moneyline_three_way_deferred", 0),
+        "three_way_matched": nonml_stats.get("moneyline_three_way_matched", 0),
         "yes_side_unknown": nonml_stats.get("moneyline_yes_side_unresolved", 0),
         "team_total_side_missing": nonml_stats.get("team_total_side_missing", 0),
         "nonml_no_event_match": nonml_stats.get("no_event_match", 0),
@@ -271,31 +271,38 @@ def main():
         nm = c["market"]
         adapter = adapter_for(nm.book)
         try:
-            ladder = adapter.fetch_yes_ask_ladder(nm.market_id)
+            yes_ladder, no_ladder = adapter.fetch_both_ladders(nm.market_id)
         except Exception as e:
             print(f"  ! orderbook failed {nm.book}:{nm.market_id}: {e}")
             continue
-        if not ladder:
-            continue
+
+        sides = [("yes", yes_ladder, c["yes_fair"])]
+        if getattr(adapter, "SUPPORTS_NO_SIDE", False) and no_ladder:
+            sides.append(("no", no_ladder, c["opposite_fair"]))
+
         fee_fn = adapter.taker_fee_per_share
-        shares, stake, exp_profit, levels = walk_ladder(ladder, c["fair_prob"], fee_fn)
-        best_ask, best_qty = ladder[0]
-        if shares == 0:
-            gross = 1 - best_ask
-            ev = (c["fair_prob"] * gross - (1 - c["fair_prob"]) * best_ask
-                  - fee_fn(best_ask, c["fair_prob"]))
-            near_misses.append((ev, c, best_ask, best_qty))
-            continue
-        ev_pct = exp_profit / stake * 100 if stake > 0 else 0
-        # Props carry a higher min-edge gate (Pinnacle prop max-stake is ~$250
-        # vs ~$7.5k+ for team markets — noisier quotes need a bigger cushion).
-        if c["market_type"] == "player_prop" and ev_pct < PROP_MIN_EDGE_PCT:
-            continue
-        results.append({
-            **c, "shares": shares, "stake": stake,
-            "expected_profit": exp_profit, "ev_pct": ev_pct,
-            "levels": levels, "ladder_top": ladder[:10],
-        })
+
+        for side, ladder, fair in sides:
+            if not ladder:
+                continue
+            shares, stake, exp_profit, levels = walk_ladder(ladder, fair, fee_fn)
+            best_ask, best_qty = ladder[0]
+            side_ctx = {**c, "side": side, "fair_prob": fair}
+            if shares == 0:
+                gross = 1 - best_ask
+                ev = fair * gross - (1 - fair) * best_ask - fee_fn(best_ask, fair)
+                near_misses.append((ev, side_ctx, best_ask, best_qty))
+                continue
+            ev_pct = exp_profit / stake * 100 if stake > 0 else 0
+            # Props carry a higher min-edge gate (Pinnacle prop max-stake is ~$250
+            # vs ~$7.5k+ for team markets — noisier quotes need a bigger cushion).
+            if c["market_type"] == "player_prop" and ev_pct < PROP_MIN_EDGE_PCT:
+                continue
+            results.append({
+                **side_ctx, "shares": shares, "stake": stake,
+                "expected_profit": exp_profit, "ev_pct": ev_pct,
+                "levels": levels, "ladder_top": ladder[:10],
+            })
 
     print(f"[eval] +EV markets: {len(results)}  near-misses: {len(near_misses)}")
 
@@ -306,12 +313,13 @@ def main():
             ev, c, ask, qty = near_misses[0]
             nm = c["market"]
             adapter = adapter_for(nm.book)
+            side_label = (c.get("side") or "yes").upper()
             print(f"Best near-miss:")
             print(f"  [{nm.book}] {nm.market_id}  ({nm.title})")
             print(f"  Pinnacle: {c['pin_matchup']}  [{c['market_type']} {c['period_label']}]  "
                   f"{c['yes_side_price']:+d}/{c['opposite_side_price']:+d}")
-            print(f"  side=YES on '{c['selection']}'  fair_prob={c['fair_prob']:.4f}")
-            print(f"  best {nm.book} YES ask: {fmt_book_price(ask)}  qty={qty:,}  ev_per_share={ev:+.4f}")
+            print(f"  side={side_label} on '{c['selection']}'  fair_prob={c['fair_prob']:.4f}")
+            print(f"  best {nm.book} {side_label} ask: {fmt_book_price(ask)}  qty={qty:,}  ev_per_share={ev:+.4f}")
             print(f"  breakeven fair prob at this price: "
                   f"{breakeven_fair(ask, adapter.taker_fee_per_share):.4f}")
         sys.exit(0)
@@ -340,11 +348,12 @@ def main():
     print(f"Devigged fair prob:  yes {best['yes_fair']:.4f}  |  opp {best['opposite_fair']:.4f}  "
           f"(multiplicative devig, vig={vig_pct:.2f}%)")
     print()
-    print(f"Bet:  BUY YES on '{best['selection']}'   ({nm.book} side: '{best['yes_soft_name']}')")
+    best_side = (best.get("side") or "yes").upper()
+    print(f"Bet:  BUY {best_side} on '{best['selection']}'   ({nm.book} side: '{best['yes_soft_name']}')")
     print(f"Fair probability of this side: {best['fair_prob']:.4f}")
     print(f"URL:  {best['market_url']}")
     print()
-    print(f"YES-ask ladder walked (fee model: {nm.book}):")
+    print(f"{best_side}-ask ladder walked (fee model: {nm.book}):")
     print(f"  {'ask':>18}  {'qty':>10}  {'ev/share':>10}  {'ev%':>8}  {'breakeven fair':>14}")
     for price, qty, ev in best["levels"]:
         be = breakeven_fair(price, adapter.taker_fee_per_share)
@@ -365,9 +374,10 @@ def main():
         tag = f"[{r['book'][:2]}/{r['market_type'][:2]}"
         tag += "" if r['period_label'] == "FULL" else f"/{r['period_label']}"
         tag += "]"
+        side_label = (r.get("side") or "yes").upper()
         print(f"  ${r['expected_profit']:>8,.2f} EV  "
               f"{r['ev_pct']:>+5.2f}%  {r['shares']:>8,} sh  "
-              f"{r['market_id']}  {tag} YES {r['selection']}")
+              f"{r['market_id']}  {tag} {side_label} {r['selection']}")
 
 
 if __name__ == "__main__":

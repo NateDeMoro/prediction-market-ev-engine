@@ -23,6 +23,7 @@ from .common import (
 )
 
 BOOK = "kalshi"
+SUPPORTS_NO_SIDE = True
 
 DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SNAPSHOT_DIR = os.path.join(DIR, "data", "kalshi_snapshots")
@@ -31,7 +32,12 @@ BASE = "https://api.elections.kalshi.com/trade-api/v2"
 HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 REQUEST_TIMEOUT = 10
 
-FEE_RATE = 0.05
+# Kalshi taker fee per the official fee schedule (effective 2026-02-05):
+#   fees = round_up(0.07 * C * P * (1-P))
+# Charged upfront at fill execution, independent of outcome. Peaks at
+# $0.0175/share when P=0.5 and falls to zero at both extremes.
+# Source: Kalshi Fee Structure PDF, 2026-02-05.
+FEE_RATE = 0.07
 
 # Series ticker classifiers.
 MONEYLINE_SUFFIX = re.compile(r"(GAME|ML|H2H)$")
@@ -280,10 +286,19 @@ def normalize_market(raw):
         if stat_canonical is None:
             return None
 
-        # Team abbreviation: third hyphen-delimited chunk's leading 3 chars.
+        # Team abbreviation: third hyphen-delimited chunk's leading chars. Most
+        # Kalshi codes are 3 chars (NBA: LAL/BOS/...; NHL: ANA/EDM/...), but a
+        # handful of NHL clubs use a 2-char code (TB Lightning, and historically
+        # NJ/SJ/LA) with the player's first-name initial occupying char 3.
+        # Try 3-char first, then fall back to 2-char.
         parts = ticker.split("-")
-        team_abbrev = parts[2][:3] if len(parts) >= 3 and len(parts[2]) >= 3 else None
-        pin_team = resolve_team_abbrev(team_abbrev, league) if team_abbrev else None
+        chunk = parts[2] if len(parts) >= 3 else ""
+        pin_team = None
+        for width in (3, 2):
+            if len(chunk) >= width:
+                pin_team = resolve_team_abbrev(chunk[:width], league)
+                if pin_team:
+                    break
 
         nm = NormalizedMarket(
             book=BOOK,
@@ -346,47 +361,88 @@ def market_url(normalized):
 
 
 def fee_on_win_per_share(price):
-    """Fee deducted from the winning payoff per share. Kalshi: 5% of profit."""
-    return FEE_RATE * (1.0 - price)
-
-
-def fee_on_stake_per_share(price):
-    """Fee paid upfront on stake per share. Kalshi: zero (fees only on win)."""
+    """Fee deducted from the winning payoff per share. Kalshi charges its
+    trading fee upfront at fill (see `fee_on_stake_per_share`), so winners
+    collect the full $1/contract — nothing is skimmed on settlement."""
     return 0.0
 
 
+def fee_on_stake_per_share(price):
+    """Trading fee paid upfront at fill per share: 0.07 * P * (1-P).
+
+    Per-trade cent rounding (Kalshi rounds the total fee up to the next cent
+    per trade) is ignored here — a second-order effect that averages out over
+    many-share fills and is immaterial to EV / Kelly math.
+    """
+    return FEE_RATE * price * (1.0 - price)
+
+
 def taker_fee_per_share(price, fair_prob):
-    """Expected per-share fee at the given fill price, given fair probability.
-    Derivable as fair_prob * fee_on_win(p) + fee_on_stake(p)."""
-    return fair_prob * fee_on_win_per_share(price) + fee_on_stake_per_share(price)
+    """Expected per-share fee at the given fill price. Upfront fee is
+    deterministic (paid regardless of outcome), so `fair_prob` is unused —
+    kept in the signature for adapter-interface symmetry."""
+    return fee_on_stake_per_share(price)
 
 
 # ---------------------------------------------------------------------------
 # Live API calls
 # ---------------------------------------------------------------------------
 
-def fetch_yes_ask_ladder(market_id):
-    """Return ascending YES-ask ladder derived from Kalshi's NO-bid book."""
-    r = requests.get(f"{BASE}/markets/{market_id}/orderbook",
-                     headers=HEADERS, timeout=REQUEST_TIMEOUT)
-    r.raise_for_status()
-    ob = r.json().get("orderbook_fp") or r.json().get("orderbook") or {}
-    no_side = ob.get("no_dollars") or ob.get("no") or []
+def _parse_ladder(entries):
+    """Transform a raw Kalshi book side ([[bid_price, qty], ...]) into an
+    ascending ask ladder in the complement's price space.
+
+    Feeding the `no_dollars` side yields YES-asks; feeding `yes_dollars` yields
+    NO-asks. Filters out zero-qty and out-of-range entries the same way either
+    direction.
+    """
     ladder = []
-    for entry in no_side:
+    for entry in entries:
         try:
-            no_price = float(entry[0])
+            bid_price = float(entry[0])
             qty = int(float(entry[1]))
         except (TypeError, ValueError, IndexError):
             continue
         if qty <= 0:
             continue
-        yes_ask = round(1.0 - no_price, 4)
-        if yes_ask <= 0 or yes_ask >= 1:
+        ask = round(1.0 - bid_price, 4)
+        if ask <= 0 or ask >= 1:
             continue
-        ladder.append((yes_ask, qty))
+        ladder.append((ask, qty))
     ladder.sort(key=lambda x: x[0])
     return ladder
+
+
+def _fetch_orderbook(market_id):
+    r = requests.get(f"{BASE}/markets/{market_id}/orderbook",
+                     headers=HEADERS, timeout=REQUEST_TIMEOUT)
+    r.raise_for_status()
+    body = r.json()
+    return body.get("orderbook_fp") or body.get("orderbook") or {}
+
+
+def fetch_yes_ask_ladder(market_id):
+    """Return ascending YES-ask ladder derived from Kalshi's NO-bid book."""
+    ob = _fetch_orderbook(market_id)
+    return _parse_ladder(ob.get("no_dollars") or ob.get("no") or [])
+
+
+def fetch_no_ask_ladder(market_id):
+    """Return ascending NO-ask ladder derived from Kalshi's YES-bid book."""
+    ob = _fetch_orderbook(market_id)
+    return _parse_ladder(ob.get("yes_dollars") or ob.get("yes") or [])
+
+
+def fetch_both_ladders(market_id):
+    """Return (yes_ask_ladder, no_ask_ladder) parsed from one orderbook call.
+
+    use when: the caller needs both sides (EV scanner, dashboard). Halves
+    traffic vs. calling `fetch_yes_ask_ladder` + `fetch_no_ask_ladder`.
+    """
+    ob = _fetch_orderbook(market_id)
+    yes_ladder = _parse_ladder(ob.get("no_dollars") or ob.get("no") or [])
+    no_ladder = _parse_ladder(ob.get("yes_dollars") or ob.get("yes") or [])
+    return yes_ladder, no_ladder
 
 
 def fetch_settlement(market_id):

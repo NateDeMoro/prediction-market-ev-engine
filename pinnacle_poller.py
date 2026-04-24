@@ -148,20 +148,29 @@ def fetch_related_matchups(parent_id):
     return get(f"/matchups/{parent_id}/related")
 
 
-_PROP_DESC_RE = re.compile(
+_PROP_DESC_PAREN = re.compile(
     r"^(?P<player>.+?)\s*\((?P<stat>[^)]+)\)(?:\s*\([^)]+\))?\s*$"
 )
+# NBA uses a different shape than NHL: 'Anthony Edwards Total Threes Made'
+# rather than 'Anthony Edwards (Threes Made)'.
+_PROP_DESC_TOTAL = re.compile(r"^(?P<player>.+?)\s+Total\s+(?P<stat>.+?)\s*$")
 
 
 def parse_prop_description(desc):
-    """'Sidney Crosby (Points)' -> ('Sidney Crosby', 'Points').
+    """Pinnacle special.description -> (player, stat).
+    NHL: 'Sidney Crosby (Points)' -> ('Sidney Crosby', 'Points').
+    NBA: 'Anthony Edwards Total Threes Made' -> ('Anthony Edwards', 'Threes Made').
     Strips trailing parenthetical metadata like '(must start)'."""
     if not desc:
         return None, None
-    m = _PROP_DESC_RE.match(desc.strip())
-    if not m:
-        return None, None
-    return m.group("player").strip(), m.group("stat").strip()
+    s = desc.strip()
+    m = _PROP_DESC_PAREN.match(s)
+    if m:
+        return m.group("player").strip(), m.group("stat").strip()
+    m = _PROP_DESC_TOTAL.match(s)
+    if m:
+        return m.group("player").strip(), m.group("stat").strip()
+    return None, None
 
 
 def market_fingerprint(market):

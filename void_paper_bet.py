@@ -51,14 +51,17 @@ def _read_jsonl(path):
     return out
 
 
-def _key(book, market_id):
-    return f"{book}:{market_id}"
+def _key(book, market_id, side="yes"):
+    return f"{book}:{market_id}:{side}"
 
 
 def _record_key(record):
     book = record.get("book") or "kalshi"
     mid = record.get("market_id") or record.get("ticker")
-    return _key(book, mid) if mid else None
+    if not mid:
+        return None
+    side = record.get("side") or "yes"
+    return _key(book, mid, side)
 
 
 def main():
@@ -68,6 +71,8 @@ def main():
                     help="Void every currently-open (unsettled) position.")
     ap.add_argument("--book", default=None,
                     help="Restrict matching to this book (default: any book).")
+    ap.add_argument("--side", default=None, choices=[None, "yes", "no"],
+                    help="Restrict to YES or NO placements (default: both).")
     ap.add_argument("--reason", default="cross_league_mismatch",
                     help="Free-text reason recorded on the settlement row.")
     ap.add_argument("--dry-run", action="store_true",
@@ -88,6 +93,11 @@ def main():
         if k:
             by_key[k] = t
 
+    def _side_ok(placement):
+        if args.side is None:
+            return True
+        return (placement.get("side") or "yes") == args.side
+
     targets = []
     missing = []
     already_settled = []
@@ -98,27 +108,25 @@ def main():
                 continue
             if args.book and (placement.get("book") or "kalshi") != args.book:
                 continue
+            if not _side_ok(placement):
+                continue
             targets.append(placement)
 
     for mid in args.market_ids:
+        # Without --side, void every open side on this market_id. With --side,
+        # scope to one. Without --book, scope to any book.
+        candidates = [p for k, p in by_key.items()
+                      if p.get("market_id") == mid and k not in settled_keys]
         if args.book:
-            k = _key(args.book, mid)
-            placement = by_key.get(k)
-            if placement is None:
-                missing.append(mid)
-            elif k in settled_keys:
-                already_settled.append(mid)
-            else:
-                targets.append(placement)
+            candidates = [p for p in candidates
+                          if (p.get("book") or "kalshi") == args.book]
+        candidates = [p for p in candidates if _side_ok(p)]
+        if candidates:
+            targets.extend(candidates)
+        elif any(p.get("market_id") == mid for p in by_key.values()):
+            already_settled.append(mid)
         else:
-            matches = [p for k, p in by_key.items()
-                       if (p.get("market_id") == mid) and k not in settled_keys]
-            if not matches and any(p.get("market_id") == mid for p in by_key.values()):
-                already_settled.append(mid)
-            elif not matches:
-                missing.append(mid)
-            else:
-                targets.extend(matches)
+            missing.append(mid)
 
     if missing:
         print(f"WARN: no placement found for: {', '.join(missing)}", file=sys.stderr)
@@ -139,6 +147,7 @@ def main():
             "settled_at": when,
             "book": book,
             "market_id": mid,
+            "side": placement.get("side") or "yes",
             "pin_matchup": placement.get("pin_matchup"),
             "pin_sport": placement.get("pin_sport"),
             "pin_start_time": placement.get("pin_start_time"),
@@ -162,7 +171,7 @@ def main():
 
     print(f"Voiding {len(rows)} position(s):")
     for r in rows:
-        print(f"  [{r['book']}] {r['market_id']}  stake=${r['stake']}  "
+        print(f"  [{r['book']}] {r['market_id']} ({r['side']})  stake=${r['stake']}  "
               f"selection={r['selection']!r}  pin={r['pin_matchup']!r}")
 
     if args.dry_run:

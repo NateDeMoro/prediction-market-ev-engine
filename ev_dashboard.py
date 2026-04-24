@@ -49,6 +49,7 @@ _state = {
     "book_ages": {},
     "stats": {},
     "rows": [],
+    "prop_rows": [],
     "error": None,
 }
 _lock = threading.Lock()
@@ -92,89 +93,102 @@ def scan_once():
         book = c["book"]
         adapter = adapter_for(book)
         try:
-            ladder = adapter.fetch_yes_ask_ladder(c["market_id"])
+            yes_ladder, no_ladder = adapter.fetch_both_ladders(c["market_id"])
         except Exception:
             continue
-        if not ladder:
-            continue
 
-        # Paper tracker: simulate a Kelly-sized bet the first time this
-        # (book, market_id) enters the in_window bucket. Idempotent per key.
-        try:
-            paper_tracker.maybe_place(c, ladder)
-        except Exception:
-            traceback.print_exc()
+        sides = [("yes", yes_ladder, c["yes_fair"])]
+        if getattr(adapter, "SUPPORTS_NO_SIDE", False) and no_ladder:
+            sides.append(("no", no_ladder, c["opposite_fair"]))
 
-        best_ask, best_qty = ladder[0]
-        fair = c["fair_prob"]
-        fee_fn = adapter.taker_fee_per_share
-        ev_per_share = fair * (1 - best_ask) - (1 - fair) * best_ask - fee_fn(best_ask, fair)
-
-        shares, stake, exp_profit, levels = walk_ladder(ladder, fair, fee_fn)
-        ev_pct_on_stake = (exp_profit / stake * 100) if stake > 0 else 0.0
-        # Player-prop edge gate: suppress marginal rows since prop vig + noise
-        # easily fakes out a +1-2% "edge". See find_ev_bet.PROP_MIN_EDGE_PCT.
-        if c["market_type"] == "player_prop" and ev_pct_on_stake < PROP_MIN_EDGE_PCT:
-            continue
-        # Sanity ceiling: edges this large on liquid soft books are almost
-        # always a matcher mismatch (cross-sport, wrong game, etc.). Hide
-        # from the dashboard so bogus rows don't top the list.
-        is_prop = c["market_type"] == "player_prop"
-        max_edge = (paper_tracker.SANITY_MAX_EDGE_PCT_PROP if is_prop
-                    else paper_tracker.SANITY_MAX_EDGE_PCT)
-        if ev_pct_on_stake > max_edge:
-            continue
         vig_pct = (
             1 / american_to_decimal(c["yes_side_price"])
             + 1 / american_to_decimal(c["opposite_side_price"])
             - 1
         ) * 100
+        fee_fn = adapter.taker_fee_per_share
 
-        rows.append({
-            "book": book,
-            "market_id": c["market_id"],
-            "market_url": c["market_url"],
-            "title": nm.title,
-            "pin_matchup": c["pin_matchup"],
-            "market_type": c["market_type"],
-            "period_label": c["period_label"],
-            "line": c.get("line"),
-            "selection": c["selection"],
-            "yes_pin_name": c["yes_pin_name"],
-            "yes_side_label": c["yes_side_label"],
-            "opposite_side_label": c["opposite_side_label"],
-            "yes_side_price": c["yes_side_price"],
-            "opposite_side_price": c["opposite_side_price"],
-            "yes_fair": c["yes_fair"],
-            "opposite_fair": c["opposite_fair"],
-            "fair_prob": fair,
-            "vig_pct": vig_pct,
-            "book_ask": best_ask,
-            "book_ask_american": price_to_american(best_ask),
-            "book_depth": best_qty,
-            "ev_per_share": ev_per_share,
-            "ev_pct_at_best": ev_per_share / best_ask * 100 if best_ask else 0.0,
-            "breakeven_fair": breakeven_fair(best_ask, fee_fn),
-            "pos_shares": shares,
-            "pos_stake": stake,
-            "pos_expected_profit": exp_profit,
-            "pos_ev_pct": ev_pct_on_stake,
-            "pin_start_time": c.get("pin_start_time"),
-            "in_window": c.get("in_window", False),
-            "player": c.get("player"),
-            "stat": c.get("stat"),
-        })
+        for side, ladder, fair in sides:
+            if not ladder:
+                continue
+
+            selection = c["selection"]
+            if side == "no":
+                # Prefix flags it in the UI without requiring a chip filter.
+                selection = f"NO {selection}"
+
+            # Paper tracker: simulate a Kelly-sized bet the first time this
+            # (book, market_id, side) enters the in_window bucket.
+            side_row = {**c, "side": side, "fair_prob": fair, "selection": selection}
+            try:
+                paper_tracker.maybe_place(side_row, ladder)
+            except Exception:
+                traceback.print_exc()
+
+            best_ask, best_qty = ladder[0]
+            ev_per_share = (fair * (1 - best_ask)
+                            - (1 - fair) * best_ask
+                            - fee_fn(best_ask, fair))
+
+            shares, stake, exp_profit, levels = walk_ladder(ladder, fair, fee_fn)
+            ev_pct_on_stake = (exp_profit / stake * 100) if stake > 0 else 0.0
+            if c["market_type"] == "player_prop" and ev_pct_on_stake < PROP_MIN_EDGE_PCT:
+                continue
+            is_prop = c["market_type"] == "player_prop"
+            max_edge = (paper_tracker.SANITY_MAX_EDGE_PCT_PROP if is_prop
+                        else paper_tracker.SANITY_MAX_EDGE_PCT)
+            if ev_pct_on_stake > max_edge:
+                continue
+
+            rows.append({
+                "book": book,
+                "market_id": c["market_id"],
+                "side": side,
+                "market_url": c["market_url"],
+                "title": nm.title,
+                "pin_matchup": c["pin_matchup"],
+                "market_type": c["market_type"],
+                "period_label": c["period_label"],
+                "line": c.get("line"),
+                "selection": selection,
+                "yes_pin_name": c["yes_pin_name"],
+                "yes_side_label": c["yes_side_label"],
+                "opposite_side_label": c["opposite_side_label"],
+                "yes_side_price": c["yes_side_price"],
+                "opposite_side_price": c["opposite_side_price"],
+                "yes_fair": c["yes_fair"],
+                "opposite_fair": c["opposite_fair"],
+                "fair_prob": fair,
+                "vig_pct": vig_pct,
+                "book_ask": best_ask,
+                "book_ask_american": price_to_american(best_ask),
+                "book_depth": best_qty,
+                "ev_per_share": ev_per_share,
+                "ev_pct_at_best": ev_per_share / best_ask * 100 if best_ask else 0.0,
+                "breakeven_fair": breakeven_fair(best_ask, fee_fn),
+                "pos_shares": shares,
+                "pos_stake": stake,
+                "pos_expected_profit": exp_profit,
+                "pos_ev_pct": ev_pct_on_stake,
+                "pin_start_time": c.get("pin_start_time"),
+                "in_window": c.get("in_window", False),
+                "player": c.get("player"),
+                "stat": c.get("stat"),
+            })
 
     # Rank: in-window first, then by ev_per_share descending. Always surfaces
     # actionable rows ahead of out-of-window fallbacks so the table is never
     # empty.
     rows.sort(key=lambda r: (r["in_window"], r["ev_per_share"]), reverse=True)
 
+    prop_rows = [r for r in rows if r["market_type"] == "player_prop"][:5]
+
     return {
         "pin_age": pin_age,
         "book_ages": book_ages,
         "stats": stats,
         "rows": rows[:TOP_N],
+        "prop_rows": prop_rows,
     }
 
 
@@ -188,6 +202,7 @@ def scanner_loop():
                 _state["book_ages"] = result["book_ages"]
                 _state["stats"] = result["stats"]
                 _state["rows"] = result["rows"]
+                _state["prop_rows"] = result["prop_rows"]
                 _state["error"] = None
         except Exception as e:
             with _lock:
@@ -262,6 +277,12 @@ PAGE = """<!doctype html>
     <span class="chip active" data-f="team_total">team total</span>
     <span class="chip active" data-f="player_prop">player prop</span>
   </div>
+  <div class="chips" id="side-chips">
+    <span class="chips-label">side</span>
+    <span class="chip active" data-sf="all">all</span>
+    <span class="chip active" data-sf="yes">YES</span>
+    <span class="chip active" data-sf="no">NO</span>
+  </div>
   <div id="err"></div>
   <table>
     <thead>
@@ -281,6 +302,26 @@ PAGE = """<!doctype html>
       </tr>
     </thead>
     <tbody id="rows"></tbody>
+  </table>
+
+  <h2 style="margin:28px 0 8px 0;font-size:15px;color:#c4cbd6;">Top 5 Player Props <span class="muted" style="font-size:11px;font-weight:normal;">(tracking confirmation)</span></h2>
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Market</th>
+        <th>Matchup</th>
+        <th>Player / Stat</th>
+        <th>Selection</th>
+        <th>Pin 2-way</th>
+        <th>Fair %</th>
+        <th>Book ask</th>
+        <th>Start</th>
+        <th>EV/share</th>
+        <th>Market ID</th>
+      </tr>
+    </thead>
+    <tbody id="prop-rows"></tbody>
   </table>
 
 <script>
@@ -328,6 +369,7 @@ function render(data) {
     const tr = document.createElement('tr');
     tr.dataset.mtype = r.market_type || 'moneyline';
     tr.dataset.book = r.book || '';
+    tr.dataset.side = r.side || 'yes';
     if (!r.in_window) tr.classList.add('oow');
     const evClass = r.ev_per_share > 0 ? 'pos' : 'neg';
     const winBadge = r.in_window ? '' : '<span class="badge">outside 0.5–3h</span>';
@@ -370,6 +412,43 @@ function render(data) {
   if (!data.rows || data.rows.length === 0) {
     tbody.innerHTML = '<tr><td colspan="12" class="muted" style="padding:24px;text-align:center;">no matched markets</td></tr>';
   }
+
+  const propBody = document.getElementById('prop-rows');
+  propBody.innerHTML = '';
+  (data.prop_rows || []).forEach((r, i) => {
+    const tr = document.createElement('tr');
+    if (!r.in_window) tr.classList.add('oow');
+    const evClass = r.ev_per_share > 0 ? 'pos' : 'neg';
+    const winBadge = r.in_window ? '' : '<span class="badge">outside 0.5–3h</span>';
+    const bookBadge = r.book ?
+        '<span class="book ' + r.book + '">' + r.book + '</span>' : '';
+    const periodTag = (r.period_label && r.period_label !== 'FULL') ?
+                      ' <span class="muted">' + r.period_label + '</span>' : '';
+    const evCell = (r.ev_per_share >= 0 ? '+' : '') + (r.ev_per_share).toFixed(4) +
+                   ' <span class="muted">(' +
+                   (r.ev_pct_at_best >= 0 ? '+' : '') + r.ev_pct_at_best.toFixed(2) + '%)</span>';
+    const playerStat = (r.player || '—') + ' <span class="muted">· ' + (r.stat || '—') + '</span>';
+    const url = r.market_url || '#';
+    tr.innerHTML =
+        '<td>' + (i+1) + '</td>' +
+        '<td><span class="mtype player_prop">PROP</span>' + bookBadge + periodTag + '</td>' +
+        '<td>' + r.pin_matchup + winBadge + '</td>' +
+        '<td>' + playerStat + '</td>' +
+        '<td>' + r.selection + '</td>' +
+        '<td class="mono">' + sign(r.yes_side_price) + '/' + sign(r.opposite_side_price) +
+           ' <span class="muted">(vig ' + r.vig_pct.toFixed(1) + '%)</span></td>' +
+        '<td class="mono">' + (r.fair_prob * 100).toFixed(2) + '%</td>' +
+        '<td class="mono">' + sign(r.book_ask_american) + ' (' + (r.book_ask * 100).toFixed(1) + '¢)' +
+           ' <span class="muted">x' + r.book_depth.toLocaleString() + '</span></td>' +
+        '<td class="mono">' + fmtStart(r.pin_start_time) + '</td>' +
+        '<td class="mono ' + evClass + '">' + evCell + '</td>' +
+        '<td class="mono" style="font-size:11px;"><a href="' + url + '" target="_blank">' + r.market_id + '</a></td>';
+    propBody.appendChild(tr);
+  });
+  if (!(data.prop_rows || []).length) {
+    propBody.innerHTML = '<tr><td colspan="11" class="muted" style="padding:24px;text-align:center;">no player props matched</td></tr>';
+  }
+
   applyFilters();
 }
 
@@ -378,12 +457,16 @@ function applyFilters() {
   document.querySelectorAll('#chips .chip.active').forEach(c => types.add(c.dataset.f));
   const books = new Set();
   document.querySelectorAll('#book-chips .chip.active').forEach(c => books.add(c.dataset.bf));
+  const sides = new Set();
+  document.querySelectorAll('#side-chips .chip.active').forEach(c => sides.add(c.dataset.sf));
   const allTypes = types.has('all');
   const allBooks = books.has('all');
+  const allSides = sides.has('all');
   document.querySelectorAll('#rows tr').forEach(tr => {
     const typeOk = allTypes || types.has(tr.dataset.mtype);
     const bookOk = allBooks || books.has(tr.dataset.book);
-    if (typeOk && bookOk) tr.classList.remove('hidden');
+    const sideOk = allSides || sides.has(tr.dataset.side);
+    if (typeOk && bookOk && sideOk) tr.classList.remove('hidden');
     else tr.classList.add('hidden');
   });
 }
@@ -410,6 +493,7 @@ function wireChipGroup(containerId, allKey, activeAttr) {
 }
 wireChipGroup('chips', 'f', 'f');
 wireChipGroup('book-chips', 'bf', 'bf');
+wireChipGroup('side-chips', 'sf', 'sf');
 
 async function tick() {
   try {
@@ -476,7 +560,7 @@ PAPER_PAGE = """<!doctype html>
     <thead><tr>
       <th>Placed</th><th>Market</th><th>Matchup</th><th>Selection</th>
       <th>Fair %</th><th>Edge %</th><th>Fill</th><th>Shares</th><th>Stake</th>
-      <th>Exp. profit</th><th>Start</th><th>Market ID</th>
+      <th>Exp. profit</th><th>Start</th>
     </tr></thead>
     <tbody id="open"></tbody>
   </table>
@@ -484,8 +568,8 @@ PAPER_PAGE = """<!doctype html>
   <table>
     <thead><tr>
       <th>Settled</th><th>Market</th><th>Matchup</th><th>Selection</th>
-      <th>Fair %</th><th>Close %</th><th>CLV</th><th>Edge %</th><th>Fill</th><th>Shares</th><th>Stake</th>
-      <th>Result</th><th>Net P&amp;L</th><th>Bankroll</th><th>Market ID</th>
+      <th>Fair %</th><th>Close %</th><th>Fair Δ</th><th>CLV</th><th>Edge %</th><th>Fill</th><th>Shares</th><th>Stake</th>
+      <th>Result</th><th>Net P&amp;L</th><th>Bankroll</th>
     </tr></thead>
     <tbody id="settled"></tbody>
   </table>
@@ -506,13 +590,6 @@ function fmtStart(iso) {
   return when + ' <span class="muted">(' + delta + ')</span>';
 }
 function rowBook(r) { return r.book || 'kalshi'; }
-function rowMarketId(r) { return r.market_id || r.ticker || '—'; }
-function rowMarketUrl(r) {
-  if (r.market_url) return r.market_url;
-  // Legacy records (pre-adapter refactor) only carry a Kalshi ticker.
-  const mid = rowMarketId(r);
-  return 'https://kalshi.com/markets/' + mid.toLowerCase().split('-')[0];
-}
 function bookBadge(r) {
   const b = rowBook(r);
   return '<span class="book ' + b + '">' + b + '</span>';
@@ -542,11 +619,22 @@ function render(data) {
               '<div class="val ' + cls + '">' + sign + bps.toFixed(2) + ' pp</div>' +
               '<div class="muted" style="font-size:11px;">' + sub + '</div></div>';
   }
+  let fairDeltaTile = '<div class="stat"><div class="lbl">Avg Fair Δ</div><div class="val">—</div></div>';
+  if (typeof s.avg_fair_delta === 'number') {
+    const bps = s.avg_fair_delta * 100;
+    const cls = bps >= 0 ? 'pos' : 'neg';
+    const sign = bps >= 0 ? '+' : '';
+    const sub = (s.fair_delta_samples || 0) + ' samples · ' + (s.fair_delta_positive || 0) + ' positive';
+    fairDeltaTile = '<div class="stat"><div class="lbl">Avg Fair Δ</div>' +
+                    '<div class="val ' + cls + '">' + sign + bps.toFixed(2) + ' pp</div>' +
+                    '<div class="muted" style="font-size:11px;">' + sub + '</div></div>';
+  }
   document.getElementById('stats').innerHTML =
       '<div class="stat"><div class="lbl">Bankroll</div><div class="val">' + money(data.bankroll) + '</div></div>' +
       '<div class="stat"><div class="lbl">Net P&L</div><div class="val ' + pnlClass + '">' + money(s.total_pnl || 0) + '</div></div>' +
       '<div class="stat"><div class="lbl">Net EV</div><div class="val ' + evClass + '">' + money(s.net_ev || 0) + '</div></div>' +
       clvTile +
+      fairDeltaTile +
       '<div class="stat"><div class="lbl">ROI</div><div class="val">' + (s.roi_pct || 0).toFixed(2) + '%</div></div>' +
       '<div class="stat"><div class="lbl">Placed</div><div class="val">' + (s.total_placed || 0) + '</div></div>' +
       '<div class="stat"><div class="lbl">Open</div><div class="val">' + (s.open || 0) + '</div></div>' +
@@ -570,12 +658,11 @@ function render(data) {
         '<td class="mono">' + (r.shares || 0).toLocaleString() + '</td>' +
         '<td class="mono">' + money(r.stake) + '</td>' +
         '<td class="mono pos">' + money(r.expected_profit || 0) + '</td>' +
-        '<td class="mono">' + fmtStart(r.pin_start_time) + '</td>' +
-        '<td class="mono" style="font-size:11px;"><a href="' + rowMarketUrl(r) + '" target="_blank">' + rowMarketId(r) + '</a></td>';
+        '<td class="mono">' + fmtStart(r.pin_start_time) + '</td>';
     openBody.appendChild(tr);
   });
   if (!(data.open_positions || []).length) {
-    openBody.innerHTML = '<tr><td colspan="12" class="muted" style="padding:24px;text-align:center;">no open positions</td></tr>';
+    openBody.innerHTML = '<tr><td colspan="11" class="muted" style="padding:24px;text-align:center;">no open positions</td></tr>';
   }
 
   const settledBody = document.getElementById('settled');
@@ -594,6 +681,13 @@ function render(data) {
     const edgeCell = hasEdge ? edgePct.toFixed(2) + '%' : '—';
     const closeCell = (typeof r.fair_prob_close === 'number')
         ? (r.fair_prob_close * 100).toFixed(2) + '%' : '—';
+    let fairDeltaCell = '—';
+    let fairDeltaCls = 'mono';
+    if (typeof r.fair_prob_close === 'number' && typeof r.fair_prob === 'number') {
+      const dpp = (r.fair_prob_close - r.fair_prob) * 100;
+      fairDeltaCls = 'mono ' + (dpp >= 0 ? 'pos' : 'neg');
+      fairDeltaCell = (dpp >= 0 ? '+' : '') + dpp.toFixed(2) + ' pp';
+    }
     let clvCell = '—';
     let clvCls = 'mono';
     if (typeof r.clv === 'number') {
@@ -608,6 +702,7 @@ function render(data) {
         '<td>' + (r.selection || '—') + '</td>' +
         '<td class="mono">' + fairCell + '</td>' +
         '<td class="mono">' + closeCell + '</td>' +
+        '<td class="' + fairDeltaCls + '">' + fairDeltaCell + '</td>' +
         '<td class="' + clvCls + '">' + clvCell + '</td>' +
         '<td class="mono pos">' + edgeCell + '</td>' +
         '<td class="mono">' + ((r.avg_fill_price || 0) * 100).toFixed(1) + '¢</td>' +
@@ -615,8 +710,7 @@ function render(data) {
         '<td class="mono">' + money(r.stake) + '</td>' +
         '<td class="' + resultClass + '">' + (r.result || '—').toUpperCase() + '</td>' +
         '<td class="mono ' + pnlClass + '">' + money(r.net_pnl || 0) + '</td>' +
-        '<td class="mono">' + money(r.bankroll_after || 0) + '</td>' +
-        '<td class="mono" style="font-size:11px;">' + rowMarketId(r) + '</td>';
+        '<td class="mono">' + money(r.bankroll_after || 0) + '</td>';
     settledBody.appendChild(tr);
   });
   if (!(data.settled || []).length) {

@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 import re
+import unicodedata
 
 
 @dataclass
@@ -63,6 +64,8 @@ CANONICAL_STAT = {
     "Steals": "steals",
     "ThreePointersMade": "threes_made",
     "Three Pointers Made": "threes_made",
+    "Threes Made": "threes_made",
+    "Pts & Rebs & Asts": "pts_reb_ast",
     # --- NHL ---
     # Kalshi suffixes
     "GOALS": "nhl_goals",
@@ -125,6 +128,13 @@ TEAM_ABBREV_BY_LEAGUE = {
         "STL": "St. Louis Blues", "TBL": "Tampa Bay Lightning", "TOR": "Toronto Maple Leafs",
         "UTA": "Utah Mammoth", "VAN": "Vancouver Canucks", "VGK": "Vegas Golden Knights",
         "WSH": "Washington Capitals", "WPG": "Winnipeg Jets",
+        # Kalshi uses 2-letter codes for a handful of NHL clubs; the third char
+        # of the ticker chunk is actually the player's first-initial. The prop
+        # adapter falls back to a 2-char lookup when the 3-char lookup misses.
+        "TB": "Tampa Bay Lightning",
+        "NJ": "New Jersey Devils",
+        "SJ": "San Jose Sharks",
+        "LA": "Los Angeles Kings",
     },
 }
 
@@ -172,6 +182,17 @@ SERIES_TICKER_LEAGUE_PREFIXES = (
     ("KXDENSUPERLIGA", "DENSUPERLIGA"),
     ("KXEPL", "EPL"),
     ("KXBALLERLEAGUE", "BALLERLEAGUE"),
+    # European top flights (added 2026-04-24). Registered without team
+    # allowlists — falls back to sport-only gating, consistent with the rest
+    # of the soccer block. `KXBUNDESLIGA` startswith also covers
+    # `KXBUNDESLIGA2` (2. Bundesliga); `KXSERIEA` and `KXSERIEB` are kept
+    # distinct (Serie A is Italian top flight; Serie B is Italian 2nd tier).
+    ("KXBUNDESLIGA", "BUNDESLIGA"),
+    ("KXLIGUE1", "LIGUE1"),
+    ("KXSERIEA", "SERIEA"),
+    ("KXSERIEB", "SERIEB"),
+    ("KXSCOTTISHPREM", "SCOTTISHPREM"),
+    ("KXSWISSLEAGUE", "SWISSLEAGUE"),
     # Non-soccer internationals. Each has a distinct Pinnacle sport bucket
     # with no same-sport collisions against a registered league's allowlist
     # (MLB's allowlist excludes NPB/KBO clubs, so falling through to
@@ -237,6 +258,12 @@ LEAGUE_TO_PIN_SPORT = {
     "DENSUPERLIGA":   "Soccer",
     "EPL":            "Soccer",
     "BALLERLEAGUE":   "Soccer",
+    "BUNDESLIGA":     "Soccer",
+    "LIGUE1":         "Soccer",
+    "SERIEA":         "Soccer",
+    "SERIEB":         "Soccer",
+    "SCOTTISHPREM":   "Soccer",
+    "SWISSLEAGUE":    "Soccer",
     # Non-soccer internationals. No within-sport collisions against a
     # registered allowlisted league: MLB's allowlist excludes Japanese/Korean
     # clubs, and Golf / Australian Rules Football / Cricket are each their
@@ -363,10 +390,15 @@ _PLAYER_SUFFIX_RE = re.compile(
 
 
 def player_key(name):
-    """Normalized lowercase player name used as a fuzzy-match input."""
+    """Normalized lowercase player name used as a fuzzy-match input.
+
+    NFKD-decomposes and strips combining marks so Kalshi's "Nikola Vučević"
+    collapses to the same key as Pinnacle's "Nikola Vucevic".
+    """
     if not name:
         return ""
-    s = name.strip()
+    s = unicodedata.normalize("NFKD", name.strip())
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
     # strip trailing suffixes like "Jr." / "III"
     while True:
         stripped = _PLAYER_SUFFIX_RE.sub("", s)

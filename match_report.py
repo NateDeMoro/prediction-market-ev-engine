@@ -81,7 +81,7 @@ def main():
     print(f"  time_out_of_tolerance:   {s['time_out_of_tolerance']}")
     print(f"  ambiguous_resolved:      {s['ambiguous_resolved']}")
     print(f"  pairs_after_ml_gates:    {ns['matched_by_type'].get('moneyline', 0)}"
-          f"  (3-way deferred: {ns.get('moneyline_three_way_deferred', 0)}, "
+          f"  (3-way matched: {ns.get('moneyline_three_way_matched', 0)}, "
           f"yes-side unresolved: {ns.get('moneyline_yes_side_unresolved', 0)})")
     print()
     print("== Non-mainline ==")
