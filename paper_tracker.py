@@ -46,6 +46,7 @@ KELLY_FRACTION = 0.25
 # multiple player props all resolve on the same game state). Once the cap is
 # hit, further Kelly stakes on that matchup are clamped or skipped.
 PER_MATCH_STAKE_CAP_PCT = 0.03
+PER_MATCH_BET_CAP = 2          # Max open paper bets sharing a Pinnacle matchup
 MIN_EDGE_PCT = 2.0             # per-book floor for edge_pct placement gate
 # Per-book price-aware threshold: min_edge_pct(px) = max(MIN_EDGE_PCT,
 # 100 * fee_rate * (1-px) + margin_pp). The BE term cancels the upfront
@@ -116,6 +117,15 @@ def _stake_on_matchup(pin_matchup_id):
     if pin_matchup_id is None:
         return 0.0
     return sum((r.get("stake") or 0.0) for r in _open_positions.values()
+               if r.get("pin_matchup_id") == pin_matchup_id)
+
+
+def _count_on_matchup(pin_matchup_id):
+    """Number of open positions sharing this Pinnacle matchup id. Caller must
+    hold `_lock`."""
+    if pin_matchup_id is None:
+        return 0
+    return sum(1 for r in _open_positions.values()
                if r.get("pin_matchup_id") == pin_matchup_id)
 
 
@@ -382,6 +392,10 @@ def maybe_place(row, ladder, now=None):
             return None
         bankroll_now = _bankroll
         already_on_match = _stake_on_matchup(pin_matchup_id)
+        open_bets_on_match = _count_on_matchup(pin_matchup_id)
+
+    if pin_matchup_id is not None and open_bets_on_match >= PER_MATCH_BET_CAP:
+        return None
 
     per_match_cap = bankroll_now * PER_MATCH_STAKE_CAP_PCT
     available_match_stake = max(0.0, per_match_cap - already_on_match)
