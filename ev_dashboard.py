@@ -697,7 +697,7 @@ function render(data) {
     }
     tr.innerHTML =
         '<td class="mono">' + fmtDate(r.settled_at) + '</td>' +
-        '<td>' + bookBadge(r) + '</td>' +
+        '<td>' + mtypeCell(r) + '</td>' +
         '<td>' + (r.pin_matchup || '—') + '</td>' +
         '<td>' + (r.selection || '—') + '</td>' +
         '<td class="mono">' + fairCell + '</td>' +

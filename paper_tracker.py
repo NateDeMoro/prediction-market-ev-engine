@@ -41,6 +41,11 @@ from devig_utils import devig_multiplicative, synthesize_combined_american
 
 INITIAL_BANKROLL = 5000.0
 KELLY_FRACTION = 0.25
+# Per-Pinnacle-matchup stake cap as a fraction of bankroll. Bounds aggregate
+# exposure on correlated bets within one match (team total Over + spread +
+# multiple player props all resolve on the same game state). Once the cap is
+# hit, further Kelly stakes on that matchup are clamped or skipped.
+PER_MATCH_STAKE_CAP_PCT = 0.03
 MIN_EDGE_PCT = 2.0             # per-book floor for edge_pct placement gate
 # Per-book price-aware threshold: min_edge_pct(px) = max(MIN_EDGE_PCT,
 # 100 * fee_rate * (1-px) + margin_pp). The BE term cancels the upfront
@@ -103,6 +108,15 @@ _bankroll = INITIAL_BANKROLL
 def _key(book, market_id, side="yes"):
     """Dedupe key. Legacy two-part keys replay as side='yes'."""
     return f"{book}:{market_id}:{side}"
+
+
+def _stake_on_matchup(pin_matchup_id):
+    """Sum of open-position stakes sharing this Pinnacle matchup id, across
+    all books / market types / sides. Caller must hold `_lock`."""
+    if pin_matchup_id is None:
+        return 0.0
+    return sum((r.get("stake") or 0.0) for r in _open_positions.values()
+               if r.get("pin_matchup_id") == pin_matchup_id)
 
 
 def _min_edge_pct(book, avg_fill_price, is_prop):
@@ -277,12 +291,15 @@ def _fill_shares(levels, target_shares):
     return filled, stake, detail
 
 
-def size_bet(ladder, fair_prob, bankroll, adapter):
+def size_bet(ladder, fair_prob, bankroll, adapter, max_stake=None):
     """Kelly-sized fill under the adapter's fee model.
 
     Net payoff per share on win:   1 - p - fee_on_win(p)
     Effective stake per share:     p + fee_on_stake(p)
     Kelly b = net_win / effective_stake, f_full = (b*q - (1-q)) / b.
+
+    `max_stake`, if set, clamps the Kelly stake budget — used by the per-match
+    cap so correlated bets on one match can't exceed a bankroll fraction.
     """
     pos_levels, pos_shares, pos_stake = _walk_positive_ev(ladder, fair_prob, adapter)
     if pos_shares <= 0 or pos_stake <= 0:
@@ -303,6 +320,8 @@ def size_bet(ladder, fair_prob, bankroll, adapter):
         return None
 
     kelly_stake_budget = bankroll * f_full * KELLY_FRACTION
+    if max_stake is not None:
+        kelly_stake_budget = min(kelly_stake_budget, max_stake)
     if kelly_stake_budget <= 0:
         return None
 
@@ -357,13 +376,21 @@ def maybe_place(row, ladder, now=None):
     side = row.get("side") or "yes"
     key = _key(book, market_id, side)
 
+    pin_matchup_id = row.get("pin_matchup_id")
     with _lock:
         if key in _placed_keys:
             return None
         bankroll_now = _bankroll
+        already_on_match = _stake_on_matchup(pin_matchup_id)
+
+    per_match_cap = bankroll_now * PER_MATCH_STAKE_CAP_PCT
+    available_match_stake = max(0.0, per_match_cap - already_on_match)
+    if available_match_stake <= 0:
+        return None
 
     adapter = adapter_for(book)
-    sized = size_bet(ladder, row["fair_prob"], bankroll_now, adapter)
+    sized = size_bet(ladder, row["fair_prob"], bankroll_now, adapter,
+                     max_stake=available_match_stake)
     if sized is None:
         return None
 
@@ -517,20 +544,15 @@ def _find_pin_prices(pin_rows, record):
             continue
 
         if three_way_ml:
-            # 3-way soccer ML: Pinnacle publishes home/away/draw; opposite was
-            # synthesized at placement as the combined NO of the other two.
-            # Recompute the synthesis here so CLV devig is internally consistent.
+            # Re-synthesize the combined NO at close time so CLV devig matches
+            # the placement-time `opposite_side_price` construction.
             prices_r = r.get("prices") or []
-            if len(prices_r) != 3:
-                continue
             three_way = {p.get("designation"): p.get("price") for p in prices_r
                          if p.get("designation") in ("home", "away", "draw")}
-            if set(three_way.keys()) != {"home", "away", "draw"}:
-                continue
-            if yes_d not in three_way:
+            if set(three_way.keys()) != {"home", "away", "draw"} or yes_d not in three_way:
                 continue
             yes_price = three_way[yes_d]
-            others = [three_way[k] for k in ("home", "away", "draw") if k != yes_d]
+            others = [v for k, v in three_way.items() if k != yes_d]
             opp_price = synthesize_combined_american(others)
             if yes_price is not None and opp_price is not None:
                 return yes_price, opp_price
@@ -584,21 +606,27 @@ def _find_pin_prices(pin_rows, record):
 
 def _capture_close_for(record, pin_rows, now):
     """Attempt to capture closing Pinnacle fair prob for this open position.
-    Appends to paper_closes.jsonl and populates _closes_by_key on success."""
+    Appends to paper_closes.jsonl and populates _closes_by_key on success.
+
+    Team markets capture once in [start - LEAD, start + TRAIL]. Player props
+    capture continuously (last-seen wins) from placement onward, since
+    Pinnacle removes props at game start and the close-window snapshot
+    typically no longer contains the line."""
     book = record.get("book") or "kalshi"
     market_id = record.get("market_id") or record.get("ticker")
     if not market_id:
         return None
     side = record.get("side") or "yes"
     key = _key(book, market_id, side)
-    if key in _closes_by_key:
+    is_prop = record.get("market_type") == "player_prop"
+    if key in _closes_by_key and not is_prop:
         return None
 
     start = _parse_iso(record.get("pin_start_time"))
     if start is None:
         return None
     dt_to_start = (start - now).total_seconds()
-    if dt_to_start > CLOSE_CAPTURE_LEAD_SEC:
+    if not is_prop and dt_to_start > CLOSE_CAPTURE_LEAD_SEC:
         return None
     if dt_to_start < -CLOSE_CAPTURE_TRAIL_SEC:
         return None
@@ -635,22 +663,36 @@ def _capture_close_for(record, pin_rows, now):
         "minutes_before_start": round(dt_to_start / 60.0, 2),
     }
     with _lock:
-        if key in _closes_by_key:
-            return None
+        existing = _closes_by_key.get(key)
+        if existing is not None:
+            if not is_prop:
+                return None
+            # Throttle prop-close JSONL writes: only append when fair_prob_close
+            # actually moves. Replay is last-write-wins on the JSONL, so this
+            # cuts noise without affecting the captured value.
+            if existing.get("fair_prob_close") == close["fair_prob_close"]:
+                return None
         _append_jsonl(CLOSES_PATH, close)
         _closes_by_key[key] = close
     return close
 
 
 def capture_closes_once():
-    """Check each open position once; capture closing fair-prob if within window."""
+    """Check each open position once; capture closing fair-prob if within window.
+
+    Props remain pending after their first capture so we keep updating the
+    last-seen fair prob until Pinnacle drops the line (game start)."""
     with _lock:
-        pending = [r for r in _open_positions.values()
-                   if _record_key(r) not in _closes_by_key]
+        pending = []
+        for r in _open_positions.values():
+            is_prop = r.get("market_type") == "player_prop"
+            if is_prop or _record_key(r) not in _closes_by_key:
+                pending.append(r)
     if not pending:
         return
     # Drop any whose startTime is already outside the capture window, so we
-    # don't load a snapshot we won't use.
+    # don't load a snapshot we won't use. Props use no lead cutoff so we
+    # capture continuously from placement onward.
     now = datetime.now(timezone.utc)
     relevant = []
     for r in pending:
@@ -658,8 +700,12 @@ def capture_closes_once():
         if start is None:
             continue
         dt = (start - now).total_seconds()
-        if -CLOSE_CAPTURE_TRAIL_SEC <= dt <= CLOSE_CAPTURE_LEAD_SEC:
-            relevant.append(r)
+        if dt < -CLOSE_CAPTURE_TRAIL_SEC:
+            continue
+        is_prop = r.get("market_type") == "player_prop"
+        if not is_prop and dt > CLOSE_CAPTURE_LEAD_SEC:
+            continue
+        relevant.append(r)
     if not relevant:
         return
 

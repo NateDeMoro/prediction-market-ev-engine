@@ -472,12 +472,11 @@ _DRAW_LABELS = {"tie", "tied", "draw", "drawn"}
 def _ml_match_to_pair(m):
     """Convert a moneyline Match to a MatchedPair. Resolves YES -> home/away/draw.
 
-    Handles both 2-way and 3-way (soccer) Pinnacle books. For 3-way, the
-    opposite side is synthesized from the union of the other two outcomes'
-    implied probabilities — keeping MatchedPair shape flat so downstream
-    2-way devig produces the correct fair prob for the YES leg.
+    For 3-way (soccer), the opposite is synthesized from the other two
+    Pinnacle legs' combined implied prob so MatchedPair stays flat and
+    downstream 2-way devig gives the correct YES-leg fair prob.
 
-    Returns None when YES cannot be resolved (historical `yes_side_unknown`).
+    Returns None when YES cannot be resolved (`yes_side_unknown`).
     """
     pin = m.pinnacle
     prices = pin.get("prices") or []
@@ -485,17 +484,11 @@ def _ml_match_to_pair(m):
     if n_prices not in (2, 3):
         return None
 
-    by_des = {}
-    for p in prices:
-        d = p.get("designation")
-        if d in ("home", "away", "draw"):
-            by_des[d] = p.get("price")
-    if n_prices == 2:
-        if set(by_des.keys()) != {"home", "away"}:
-            return None
-    else:
-        if set(by_des.keys()) != {"home", "away", "draw"}:
-            return None
+    by_des = {p.get("designation"): p.get("price") for p in prices
+              if p.get("designation") in ("home", "away", "draw")}
+    expected_des = {"home", "away", "draw"} if n_prices == 3 else {"home", "away"}
+    if set(by_des.keys()) != expected_des:
+        return None
 
     nm = m.soft
     yes_sub = (nm.yes_sub_title or nm.team or "").strip()
@@ -538,17 +531,15 @@ def _ml_match_to_pair(m):
     if yes_designation is None:
         return None
 
+    yes_price = by_des[yes_designation]
     if n_prices == 2:
         opposite_designation = "away" if yes_designation == "home" else "home"
         opposite_label = p_away if yes_designation == "home" else p_home
-        yes_price = by_des[yes_designation]
         opposite_price = by_des[opposite_designation]
     else:
         opposite_designation = f"not_{yes_designation}"
         opposite_label = f"Not {yes_label}"
-        yes_price = by_des[yes_designation]
-        other_prices = [by_des[d] for d in ("home", "away", "draw")
-                        if d != yes_designation]
+        other_prices = [v for k, v in by_des.items() if k != yes_designation]
         opposite_price = synthesize_combined_american(other_prices)
         if opposite_price is None:
             return None

@@ -155,6 +155,7 @@ def resolve_team_abbrev(abbrev, league):
 SERIES_TICKER_LEAGUE_PREFIXES = (
     # US majors
     ("KXNBA", "NBA"),
+    ("KXNCAABB", "NCAAB"),
     ("KXNHL", "NHL"),
     ("KXNFL", "NFL"),
     ("KXMLB", "MLB"),
@@ -182,17 +183,53 @@ SERIES_TICKER_LEAGUE_PREFIXES = (
     ("KXDENSUPERLIGA", "DENSUPERLIGA"),
     ("KXEPL", "EPL"),
     ("KXBALLERLEAGUE", "BALLERLEAGUE"),
-    # European top flights (added 2026-04-24). Registered without team
-    # allowlists — falls back to sport-only gating, consistent with the rest
-    # of the soccer block. `KXBUNDESLIGA` startswith also covers
-    # `KXBUNDESLIGA2` (2. Bundesliga); `KXSERIEA` and `KXSERIEB` are kept
-    # distinct (Serie A is Italian top flight; Serie B is Italian 2nd tier).
+    # European top flights. `KXBUNDESLIGA` startswith also covers
+    # `KXBUNDESLIGA2`; Serie A/B kept distinct (Italian tiers 1 and 2).
     ("KXBUNDESLIGA", "BUNDESLIGA"),
     ("KXLIGUE1", "LIGUE1"),
     ("KXSERIEA", "SERIEA"),
     ("KXSERIEB", "SERIEB"),
     ("KXSCOTTISHPREM", "SCOTTISHPREM"),
     ("KXSWISSLEAGUE", "SWISSLEAGUE"),
+    # Global soccer expansion. EFLCHAMPIONSHIP = English 2nd tier;
+    # EFLL1 = 3rd tier; APFDDH = Paraguay; CHLLDP = Chile.
+    ("KXEFLCHAMPIONSHIP", "EFLCHAMPIONSHIP"),
+    ("KXEFLL1", "EFLL1"),
+    ("KXALEAGUE", "ALEAGUE"),
+    ("KXCZEFL", "CZEFL"),
+    ("KXJLEAGUE", "JLEAGUE"),
+    ("KXFACUP", "FACUP"),
+    ("KXTHAIL1", "THAIL1"),
+    ("KXSUPERLIG", "SUPERLIG"),
+    ("KXNWSL", "NWSL"),
+    ("KXKLEAGUE", "KLEAGUE"),
+    ("KXCHNSL", "CHNSL"),
+    ("KXURYPD", "URYPD"),
+    ("KXHNL", "HNL"),
+    ("KXELITESERIEN", "ELITESERIEN"),
+    ("KXEKSTRAKLASA", "EKSTRAKLASA"),
+    ("KXCANPL", "CANPL"),
+    ("KXUCLW", "UCLW"),
+    ("KXAFCCL", "AFCCL"),
+    ("KXEWSL", "EWSL"),
+    ("KXCHLLDP", "CHLLDP"),
+    ("KXAPFDDH", "APFDDH"),
+    ("KXBRASILEIRO", "BRASILEIRAO"),
+    # Foreign basketball minors. No team allowlists — foreign club names
+    # (Real Madrid, Bayern Munich, FMP Belgrade) don't collide with NBA.
+    # GBL = Greek Basket League; BBL = German Basketball Bundesliga;
+    # ABA = Adriatic League.
+    ("KXACB", "ACB"),
+    ("KXJBLEAGUE", "JBLEAGUE"),
+    ("KXGBL", "GBL"),
+    ("KXBBL", "BBL"),
+    ("KXBSL", "BSL"),
+    ("KXBBSERIEA", "BBSERIEA"),
+    ("KXABA", "ABA"),
+    ("KXARGLNB", "ARGLNB"),
+    ("KXNZNBL", "NZNBL"),
+    ("KXKBL", "KBL"),
+    ("KXBAL", "BAL"),
     # Non-soccer internationals. Each has a distinct Pinnacle sport bucket
     # with no same-sport collisions against a registered league's allowlist
     # (MLB's allowlist excludes NPB/KBO clubs, so falling through to
@@ -264,6 +301,40 @@ LEAGUE_TO_PIN_SPORT = {
     "SERIEB":         "Soccer",
     "SCOTTISHPREM":   "Soccer",
     "SWISSLEAGUE":    "Soccer",
+    "EFLCHAMPIONSHIP": "Soccer",
+    "EFLL1":          "Soccer",
+    "ALEAGUE":        "Soccer",
+    "CZEFL":          "Soccer",
+    "JLEAGUE":        "Soccer",
+    "FACUP":          "Soccer",
+    "THAIL1":         "Soccer",
+    "SUPERLIG":       "Soccer",
+    "NWSL":           "Soccer",
+    "KLEAGUE":        "Soccer",
+    "CHNSL":          "Soccer",
+    "URYPD":          "Soccer",
+    "HNL":            "Soccer",
+    "ELITESERIEN":    "Soccer",
+    "EKSTRAKLASA":    "Soccer",
+    "CANPL":          "Soccer",
+    "UCLW":           "Soccer",
+    "AFCCL":          "Soccer",
+    "EWSL":           "Soccer",
+    "CHLLDP":         "Soccer",
+    "APFDDH":         "Soccer",
+    "BRASILEIRAO":    "Soccer",
+    # Foreign basketball minors.
+    "ACB":       "Basketball",
+    "JBLEAGUE":  "Basketball",
+    "GBL":       "Basketball",
+    "BBL":       "Basketball",
+    "BSL":       "Basketball",
+    "BBSERIEA":  "Basketball",
+    "ABA":       "Basketball",
+    "ARGLNB":    "Basketball",
+    "NZNBL":     "Basketball",
+    "KBL":       "Basketball",
+    "BAL":       "Basketball",
     # Non-soccer internationals. No within-sport collisions against a
     # registered allowlisted league: MLB's allowlist excludes Japanese/Korean
     # clubs, and Golf / Australian Rules Football / Cricket are each their
