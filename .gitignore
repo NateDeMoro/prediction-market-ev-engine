@@ -1,8 +1,23 @@
 # Credentials / secrets
 .env
-.env.local
+.env.*
+!.env.example
 *.pem
 *.key
+*credentials*
+*secret*
+
+# Markdown — ignore all docs/notes; keep only the public README
+*.md
+!README.md
+
+# Personal / local-only state
+state.json
+instructions.txt
+
+# Claude Code local config
+.claude/
+CLAUDE.md
 
 # Python
 __pycache__/
@@ -13,6 +28,11 @@ venv/
 
 # macOS
 .DS_Store
+
+# Editors
+.idea/
+.vscode/
+*.swp
 
 # Runtime data (snapshots, logs, pids, local caches)
 data/snapshots/
@@ -29,16 +49,9 @@ data/match_report_props.json
 data/paper_trades.jsonl
 data/paper_settlements.jsonl
 data/paper_closes.jsonl
-state.json
+data/sanity_rejected.jsonl
 
-# Probe artifacts — ignore raw captures, keep NOTES.md
-data/kalshi_probe/*
-!data/kalshi_probe/NOTES.md
-data/pinnacle_probe/*
-!data/pinnacle_probe/NOTES.md
+# Probe artifacts (NOTES.md inside each is also ignored by *.md rule above)
+data/kalshi_probe/
+data/pinnacle_probe/
 data/polymarket_probe/
-
-# Editors
-.idea/
-.vscode/
-*.swp

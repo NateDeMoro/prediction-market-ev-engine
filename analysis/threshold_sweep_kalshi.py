@@ -19,7 +19,11 @@ Output columns:
 Run: `python3 threshold_sweep_kalshi.py [--num-bets N] [--trials T] [--seed S]`.
 """
 import argparse
+import os
+import sys
 from typing import Callable
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from simulations import SimConfig, run_simulation
 

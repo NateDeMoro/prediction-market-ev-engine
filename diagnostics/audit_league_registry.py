@@ -14,7 +14,10 @@ Run: python3 audit_league_registry.py
 import glob
 import json
 import os
+import sys
 from collections import Counter
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from adapters.common import (
     LEAGUE_TO_PIN_SPORT,
@@ -22,7 +25,7 @@ from adapters.common import (
     series_ticker_league,
 )
 
-DIR = os.path.dirname(os.path.abspath(__file__))
+DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def latest(pattern):

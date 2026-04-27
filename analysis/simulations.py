@@ -31,7 +31,7 @@ DEFAULT_EDGE_PCT_BY_BUCKET = {
 @dataclass
 class SimConfig:
     initial_bankroll: float = 5000.0
-    num_bets: int = 5000
+    num_bets: int = 80
     num_trials: int = 1000
     kelly_fraction: float = 0.25
     min_edge_pct: float = 2.0

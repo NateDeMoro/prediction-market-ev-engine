@@ -6,7 +6,10 @@ line close to any Kalshi strike."""
 import glob
 import json
 import os
+import sys
 from collections import defaultdict
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from adapters import all_adapters, adapter_for
 from adapters.common import COMBO_STATS, canonical_stat, player_key, fuzzy_match
@@ -17,7 +20,7 @@ from market_matcher import (
     _pinnacle_prop_fuzzy_lookup,
 )
 
-DIR = os.path.dirname(os.path.abspath(__file__))
+DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _load_latest(dir_path):

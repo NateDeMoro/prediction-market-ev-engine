@@ -8,11 +8,14 @@ Pinnacle's own web frontend uses.
 
 Run: python3 pinnacle_scrape.py
 """
+import os
 import sys
 import requests
 
 BASE = "https://guest.api.arcadia.pinnacle.com/0.1"
-API_KEY = "CmX2KcMrXuFmNg6YFbmTxE0y9CIrOi0R"
+API_KEY = os.environ.get("PINNACLE_API_KEY", "")
+if not API_KEY:
+    sys.exit("PINNACLE_API_KEY env var is required.")
 
 HEADERS = {
     "X-API-Key": API_KEY,

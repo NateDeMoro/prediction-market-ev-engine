@@ -9,8 +9,11 @@ not publishing that player.
 import glob
 import json
 import os
+import sys
 import time
 from collections import Counter, defaultdict
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from adapters import all_adapters, adapter_for
 from adapters.common import (
@@ -25,7 +28,7 @@ from market_matcher import (
     _pinnacle_prop_fuzzy_lookup,
 )
 
-DIR = os.path.dirname(os.path.abspath(__file__))
+DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SNAP_PIN = os.path.join(DIR, "data", "snapshots")
 
 
