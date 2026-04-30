@@ -1,4 +1,4 @@
-# plus-ev-bot
+# prediction-market-ev-engine
 
 A multi-book +EV scanner for U.S.-legal sports prediction markets. It treats Pinnacle as the sharp reference book, devigs its 2-way lines into a fair price, then walks the live YES-ask ladder on each soft book under that book's actual fee model to surface positive-expected-value bets.
 
