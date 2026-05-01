@@ -183,6 +183,9 @@ def _anchor_for(soft):
     return dt, tol
 
 
+_unknown_leagues_seen = set()
+
+
 def match_markets(pin_rows, soft_moneylines):
     """Pair soft-book moneyline NormalizedMarkets to Pinnacle moneylines."""
     pin_mls = load_pinnacle_moneylines(pin_rows)
@@ -240,6 +243,11 @@ def match_markets(pin_rows, soft_moneylines):
         # "Minnesota Wild" (Pinnacle NHL), which happened on 2026-04-22.
         expected_sport = pin_sport_for_league(nm.league)
         if expected_sport is None:
+            league_key = (nm.book, nm.league)
+            if league_key not in _unknown_leagues_seen:
+                _unknown_leagues_seen.add(league_key)
+                print(f"[matcher] dropping unknown league {nm.league!r} on {nm.book} "
+                      f"— add to LEAGUE_TO_PIN_SPORT in adapters/common.py")
             stats["unknown_league"] += 1
             bump_book(nm.book, "unknown_league")
             unmatched_soft.append(UnmatchedSoft(soft=nm, reason="unknown_league"))

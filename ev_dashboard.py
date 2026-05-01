@@ -17,6 +17,7 @@ import os
 import threading
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from datetime import datetime, timezone
 
 from flask import Flask, jsonify, render_template_string
@@ -37,6 +38,8 @@ import paper_tracker
 import real_tracker
 
 REFRESH_SEC = 60
+LADDER_FETCH_TIMEOUT_SEC = float(os.getenv("LADDER_FETCH_TIMEOUT_SEC", "5.0"))
+_LADDER_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ladder")
 # Superset matcher produces candidates across ML / spread / total / team_total
 # and across every registered book. A larger slice lets the client-side filter
 # chips surface meaningful rows per slice without a server round-trip.
@@ -94,7 +97,11 @@ def scan_once():
         book = c["book"]
         adapter = adapter_for(book)
         try:
-            yes_ladder, no_ladder = adapter.fetch_both_ladders(c["market_id"])
+            fut = _LADDER_EXECUTOR.submit(adapter.fetch_both_ladders, c["market_id"])
+            yes_ladder, no_ladder = fut.result(timeout=LADDER_FETCH_TIMEOUT_SEC)
+        except FutureTimeout:
+            print(f"[scan_once] ladder fetch timeout {book}:{c['market_id']}")
+            continue
         except Exception:
             continue
 

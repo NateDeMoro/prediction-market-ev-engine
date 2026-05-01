@@ -120,6 +120,11 @@ def _auth_headers(method: str, path: str) -> dict:
 
 
 def _request(method: str, path: str, *, json_body=None):
+    """Returns (status, body). On network failure status is None and body
+    carries `error` plus `ambiguous=True` if the request may have reached
+    the server (read-timeout, dropped POST). Connect-timeout / DNS / refused
+    set ambiguous=False — the request was definitely not delivered.
+    """
     headers = _auth_headers(method, path)
     if json_body is not None:
         headers["Content-Type"] = "application/json"
@@ -128,7 +133,17 @@ def _request(method: str, path: str, *, json_body=None):
     kwargs = {"headers": headers, "timeout": REQUEST_TIMEOUT}
     if json_body is not None:
         kwargs["json"] = json_body
-    r = fn(url, **kwargs)
+    is_post = method.upper() == "POST"
+    try:
+        r = fn(url, **kwargs)
+    except requests.ConnectTimeout as e:
+        return None, {"error": f"connect_timeout: {e}", "ambiguous": False}
+    except requests.ReadTimeout as e:
+        return None, {"error": f"read_timeout: {e}", "ambiguous": is_post}
+    except requests.ConnectionError as e:
+        return None, {"error": f"connection_error: {e}", "ambiguous": is_post}
+    except requests.RequestException as e:
+        return None, {"error": f"request_exception: {e}", "ambiguous": is_post}
     try:
         body = r.json()
     except ValueError:
@@ -151,6 +166,7 @@ def place_limit_order(market_slug: str, side: str, count: int, limit_price_dolla
         return {"error": f"count must be >= 1, got {count}"}
     if not (0.01 <= limit_price_dollars <= 0.99):
         return {"error": f"limit_price out of range: {limit_price_dollars}"}
+    coid = client_order_id or str(uuid.uuid4())
     body = {
         "marketSlug": market_slug,
         "type": "ORDER_TYPE_LIMIT",
@@ -160,16 +176,25 @@ def place_limit_order(market_slug: str, side: str, count: int, limit_price_dolla
         "outcomeSide": "OUTCOME_SIDE_YES" if side == "yes" else "OUTCOME_SIDE_NO",
         "action": "ORDER_ACTION_BUY",
         "manualOrderIndicator": "MANUAL_ORDER_INDICATOR_AUTOMATIC",
+        # Best-effort idempotency hint: the documented schema does not list a
+        # client id field, but sending one is harmless (unknown fields are
+        # typically ignored) and protects us if/when the field is added.
+        "clientOrderId": coid,
     }
-    # Polymarket doesn't appear to have a client-supplied id field in this
-    # schema; we keep the param to mirror Kalshi's surface but ignore it.
-    _ = client_order_id
     status, resp = _request("POST", "/v1/orders", json_body=body)
+    if status is None:
+        return {"error": resp.get("error"), "ambiguous": resp.get("ambiguous", False),
+                "client_order_id": coid, "request": body}
+    if status >= 500:
+        return {"error": f"http {status}", "response": resp, "request": body,
+                "ambiguous": True, "client_order_id": coid}
     if status >= 300:
-        return {"error": f"http {status}", "response": resp, "request": body}
+        return {"error": f"http {status}", "response": resp, "request": body,
+                "client_order_id": coid}
     order_id = resp.get("id")
     return {
         "order_id": order_id,
+        "client_order_id": coid,
         "status": "pending",
         "filled_count": 0,
         "remaining_count": int(count),
@@ -180,6 +205,8 @@ def place_limit_order(market_slug: str, side: str, count: int, limit_price_dolla
 def get_order(order_id: str) -> dict:
     path = f"/v1/order/{order_id}"
     status, resp = _request("GET", path)
+    if status is None:
+        return {"error": resp.get("error")}
     if status >= 300:
         return {"error": f"http {status}", "response": resp}
     # Polymarket wraps the order body in {"order": {...}}; older paths returned
@@ -213,6 +240,8 @@ def cancel_order(order_id: str) -> dict:
 def get_balance() -> dict:
     """GET /v1/account/balances. Returns {balance_dollars, raw}."""
     status, resp = _request("GET", "/v1/account/balances")
+    if status is None:
+        return {"error": resp.get("error")}
     if status >= 300:
         return {"error": f"http {status}", "response": resp}
     # Response shape varies; surface buying-power-like fields when present.

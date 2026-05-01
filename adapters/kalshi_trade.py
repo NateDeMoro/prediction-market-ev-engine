@@ -147,6 +147,10 @@ def _auth_headers(method: str, path: str) -> dict:
 
 
 def _request(method: str, signed_path: str, url_suffix: str, *, json_body=None):
+    """Returns (status, body). On network failure status is None and body
+    carries `error` plus `ambiguous=True` if the request may have reached
+    the server (read-timeout, dropped POST/DELETE). Connect-timeout / DNS /
+    refused set ambiguous=False — the request was not delivered."""
     headers = _auth_headers(method, signed_path)
     if json_body is not None:
         headers["Content-Type"] = "application/json"
@@ -155,7 +159,17 @@ def _request(method: str, signed_path: str, url_suffix: str, *, json_body=None):
     kwargs = {"headers": headers, "timeout": REQUEST_TIMEOUT}
     if json_body is not None:
         kwargs["json"] = json_body
-    r = fn(url, **kwargs)
+    is_mutating = method.upper() in ("POST", "DELETE")
+    try:
+        r = fn(url, **kwargs)
+    except requests.ConnectTimeout as e:
+        return None, {"error": f"connect_timeout: {e}", "ambiguous": False}
+    except requests.ReadTimeout as e:
+        return None, {"error": f"read_timeout: {e}", "ambiguous": is_mutating}
+    except requests.ConnectionError as e:
+        return None, {"error": f"connection_error: {e}", "ambiguous": is_mutating}
+    except requests.RequestException as e:
+        return None, {"error": f"request_exception: {e}", "ambiguous": is_mutating}
     try:
         body = r.json()
     except ValueError:
@@ -172,9 +186,10 @@ def place_limit_order(ticker: str, side: str, count: int, limit_cents: int,
         return {"error": f"limit_cents out of range: {limit_cents}"}
     if count < 1:
         return {"error": f"count must be >= 1, got {count}"}
+    coid = client_order_id or str(uuid.uuid4())
     body = {
         "ticker": ticker,
-        "client_order_id": client_order_id or str(uuid.uuid4()),
+        "client_order_id": coid,
         "side": side,
         "action": "buy",
         "type": "limit",
@@ -182,8 +197,17 @@ def place_limit_order(ticker: str, side: str, count: int, limit_cents: int,
         ("yes_price" if side == "yes" else "no_price"): int(limit_cents),
     }
     status, resp = _request("POST", ORDERS_PATH, "/portfolio/orders", json_body=body)
+    if status is None:
+        return {"error": resp.get("error"), "ambiguous": resp.get("ambiguous", False),
+                "client_order_id": coid, "request": body}
+    if status >= 500:
+        # 5xx may have been processed by the broker. Caller must reconcile
+        # before refunding the local stake.
+        return {"error": f"http {status}", "response": resp, "request": body,
+                "ambiguous": True, "client_order_id": coid}
     if status >= 300:
-        return {"error": f"http {status}", "response": resp, "request": body}
+        return {"error": f"http {status}", "response": resp, "request": body,
+                "client_order_id": coid}
     order = resp.get("order") or {}
     return {
         "order_id": order.get("order_id"),
@@ -213,6 +237,8 @@ def get_order(order_id: str) -> dict:
     """GET single order details. Used by the polling thread to track fills."""
     path = f"/trade-api/v2/portfolio/orders/{order_id}"
     status, resp = _request("GET", path, f"/portfolio/orders/{order_id}")
+    if status is None:
+        return {"error": resp.get("error")}
     if status >= 300:
         return {"error": f"http {status}", "response": resp}
     order = resp.get("order") or {}
@@ -235,6 +261,8 @@ def cancel_order(order_id: str) -> dict:
 def get_balance() -> dict:
     """GET account balance. Returns {balance_cents, withdrawable_cents}."""
     status, resp = _request("GET", BALANCE_PATH, "/portfolio/balance")
+    if status is None:
+        return {"error": resp.get("error")}
     if status >= 300:
         return {"error": f"http {status}", "response": resp}
     return {

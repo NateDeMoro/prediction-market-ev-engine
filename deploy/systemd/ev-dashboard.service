@@ -2,6 +2,8 @@
 Description=EV dashboard (Flask) + paper tracker
 After=network-online.target pinnacle-poller.service kalshi-poller.service
 Wants=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=20
 
 [Service]
 Type=simple
@@ -12,6 +14,8 @@ EnvironmentFile=/home/arb/Arbitrage_Betting/.env
 ExecStart=/usr/bin/python3 /home/arb/Arbitrage_Betting/ev_dashboard.py
 Restart=on-failure
 RestartSec=10s
+MemoryMax=1G
+LimitNOFILE=4096
 StandardOutput=append:/home/arb/Arbitrage_Betting/data/dashboard.stdout.log
 StandardError=append:/home/arb/Arbitrage_Betting/data/dashboard.stderr.log
 

@@ -137,6 +137,10 @@ def _write_halt(reason, pnl):
 
 
 def _halt_active():
+    # In-memory check first: settled-today P&L below threshold halts immediately,
+    # without waiting for the halt file write inside _settle_one to complete.
+    if _today_realized_pnl() <= DAILY_LOSS_HALT_USD:
+        return True
     h = _read_halt()
     if not h:
         return False
@@ -214,7 +218,7 @@ def _replay_state():
                 t["avg_fill_price"] = f["avg_fill_price"]
         if k in settled_keys:
             continue
-        if t.get("status") in ("pending", "partial", "filled"):
+        if t.get("status") in ("pending", "partial", "filled", "ambiguous"):
             _open_positions[k] = t
 
     _kalshi_balance = INITIAL_KALSHI_BALANCE
@@ -312,7 +316,8 @@ def _place_polymarket_order(record):
     if not polymarket_trade.last_look_ok(slug, api_side, limit_price, count):
         return {"error": "last_look_failed"}
 
-    resp = polymarket_trade.place_limit_order(slug, api_side, count, limit_price)
+    resp = polymarket_trade.place_limit_order(slug, api_side, count, limit_price,
+                                              client_order_id=record["client_order_id"])
     if resp.get("error"):
         return resp
     record["order_id"] = resp.get("order_id")
@@ -466,26 +471,42 @@ def maybe_place(row, ladder, now=None):
     try:
         resp = _place_real_order(record)
     except Exception as e:
+        # Adapter exceptions are typed as ambiguous for POST so this catch
+        # only fires for non-network bugs (signing failure, programmer
+        # error). Treat as definitive failure — request was not sent.
         traceback.print_exc()
         record["status"] = "error"
         record["error"] = f"{type(e).__name__}: {e}"
         resp = {"error": record["error"]}
 
     if resp.get("error"):
-        # Single refund path covers both exception and adapter-rejected errors.
-        with _lock:
-            _credit_book(book, record["stake"])
-        if resp["error"] == "pending_adapter":
-            record["status"] = "pending_adapter"
+        if resp.get("ambiguous"):
+            # Request may have reached the broker (read-timeout, dropped
+            # connection, 5xx). Do NOT refund the local stake — the order
+            # may have filled. Keep the dedup key so we don't re-place. The
+            # operator must reconcile against the broker UI and either run
+            # scripts/void_paper_bet.py-equivalent if not filled, or update
+            # status to filled if it was.
+            record["status"] = "ambiguous"
+            record["error"] = resp["error"]
+            if resp.get("client_order_id"):
+                record["client_order_id"] = resp["client_order_id"]
         else:
-            record["status"] = "error"
-        record["error"] = resp["error"]
+            # Definitive failure: request was not delivered (4xx, connect
+            # refused, last_look_failed, missing adapter). Safe to refund.
+            with _lock:
+                _credit_book(book, record["stake"])
+            if resp["error"] == "pending_adapter":
+                record["status"] = "pending_adapter"
+            else:
+                record["status"] = "error"
+            record["error"] = resp["error"]
     record["placement_response"] = resp
 
     with _lock:
         pt._append_jsonl(TRADES_PATH, record)
         _placements.append(record)
-        if record["status"] in ("pending", "partial", "filled"):
+        if record["status"] in ("pending", "partial", "filled", "ambiguous"):
             _open_positions[key] = record
 
     return record
