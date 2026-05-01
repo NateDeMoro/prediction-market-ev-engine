@@ -7,7 +7,10 @@ use when:
 
 Prereqs:
   pip3 install cryptography
-  export KALSHI_API_KEY_ID="<uuid>"
+  export KALSHI_API_KEY="<uuid>"
+  # Either:
+  export KALSHI_PRIVATE_KEY="$(base64 -i your_pem_file | tr -d '\n')"
+  # Or:
   export KALSHI_PRIVATE_KEY_PATH="$HOME/.kalshi/private_key.pem"   # chmod 600
 
 Examples:
@@ -35,7 +38,7 @@ BASE = "https://api.elections.kalshi.com/trade-api/v2"
 ORDERS_PATH = "/trade-api/v2/portfolio/orders"
 REQUEST_TIMEOUT = 15
 TICKER_RE = re.compile(r"^[A-Z0-9\-]+$")
-MAX_COUNT = 5
+MAX_COUNT = 10
 
 
 def _load_private_key(path: Path):
@@ -127,11 +130,21 @@ def main() -> int:
     if args.count < 1 or args.count > MAX_COUNT:
         sys.exit(f"--count must be 1..{MAX_COUNT} (got {args.count})")
 
-    key_id = os.environ.get("KALSHI_API_KEY_ID")
+    key_id = os.environ.get("KALSHI_API_KEY") or os.environ.get("KALSHI_API_KEY_ID")
     pem_path_str = os.environ.get("KALSHI_PRIVATE_KEY_PATH")
-    if not key_id or not pem_path_str:
-        sys.exit("set KALSHI_API_KEY_ID and KALSHI_PRIVATE_KEY_PATH")
-    private_key = _load_private_key(Path(pem_path_str).expanduser())
+    pem_b64 = os.environ.get("KALSHI_PRIVATE_KEY") or os.environ.get("KALSHI_PRIVATE_KEY_B64")
+    if not key_id:
+        sys.exit("set KALSHI_API_KEY")
+    if not pem_path_str and not pem_b64:
+        sys.exit("set KALSHI_PRIVATE_KEY (b64) or KALSHI_PRIVATE_KEY_PATH")
+    if pem_b64:
+        try:
+            pem_bytes = base64.b64decode(pem_b64.strip(), validate=True)
+        except Exception as e:
+            sys.exit(f"KALSHI_PRIVATE_KEY is not valid base64: {e}")
+        private_key = serialization.load_pem_private_key(pem_bytes, password=None)
+    else:
+        private_key = _load_private_key(Path(pem_path_str).expanduser())
 
     if args.limit_cents is None:
         if args.side != "yes":

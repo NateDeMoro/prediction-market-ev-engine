@@ -34,6 +34,7 @@ from find_ev_bet import (
     walk_ladder,
 )
 import paper_tracker
+import real_tracker
 
 REFRESH_SEC = 60
 # Superset matcher produces candidates across ML / spread / total / team_total
@@ -122,6 +123,10 @@ def scan_once():
             side_row = {**c, "side": side, "fair_prob": fair, "selection": selection}
             try:
                 paper_tracker.maybe_place(side_row, ladder)
+            except Exception:
+                traceback.print_exc()
+            try:
+                real_tracker.maybe_place(side_row, ladder)
             except Exception:
                 traceback.print_exc()
 
@@ -260,7 +265,7 @@ PAGE = """<!doctype html>
 </head>
 <body>
   <h1>+EV Dashboard <span class="muted" style="font-size:12px;">top {{top_n}} by EV/share, per-book fee model</span></h1>
-  <div class="meta"><a href="/">Live EV</a> &nbsp;·&nbsp; <a href="/paper">Paper</a></div>
+  <div class="meta"><a href="/">Live EV</a> &nbsp;·&nbsp; <a href="/paper">Paper</a> &nbsp;·&nbsp; <a href="/real">Real Trading</a></div>
   <div class="meta" id="meta">loading…</div>
   <div class="chips" id="book-chips">
     <span class="chips-label">book</span>
@@ -553,7 +558,7 @@ PAPER_PAGE = """<!doctype html>
 </head>
 <body>
   <h1>Paper Tracker <span class="muted" style="font-size:12px;">Kelly 0.25 · $5,000 compounding · per-book fee · min edge 2%</span></h1>
-  <div class="meta"><a href="/">Live EV</a> &nbsp;·&nbsp; <a href="/paper">Paper</a></div>
+  <div class="meta"><a href="/">Live EV</a> &nbsp;·&nbsp; <a href="/paper">Paper</a> &nbsp;·&nbsp; <a href="/real">Real Trading</a></div>
   <div class="stats" id="stats"></div>
   <h2>Open positions</h2>
   <table>
@@ -753,11 +758,266 @@ def api_paper():
     return jsonify(paper_tracker.snapshot())
 
 
+REAL_PAGE = """<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Real Trading</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+         background: #0e0f12; color: #e8ecf1; margin: 0; padding: 24px; }
+  h1 { margin: 0 0 4px 0; font-size: 20px; }
+  h2 { margin: 24px 0 8px 0; font-size: 15px; color: #c4cbd6; }
+  .meta { color: #9aa3b2; font-size: 12px; margin-bottom: 12px; }
+  .stats { display: flex; gap: 24px; margin: 12px 0 20px 0; flex-wrap: wrap; }
+  .stat { background: #15171c; padding: 10px 14px; border-radius: 6px; min-width: 120px; }
+  .stat .lbl { color: #9aa3b2; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .stat .val { font-size: 18px; font-weight: 600; margin-top: 2px; }
+  .banner { padding: 12px 16px; border-radius: 6px; margin: 12px 0; font-size: 13px; }
+  .banner.warn { background: #3a2710; color: #fcd34d; border-left: 4px solid #f59e0b; }
+  .banner.halt { background: #3b1010; color: #fca5a5; border-left: 4px solid #ef4444; }
+  .banner.live { background: #0f3a24; color: #6ee7b7; border-left: 4px solid #10b981; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #23262d; }
+  th { color: #9aa3b2; font-weight: 500; background: #15171c; position: sticky; top: 0; }
+  tr:hover td { background: #171a20; }
+  .pos { color: #4ade80; font-weight: 600; }
+  .neg { color: #f87171; font-weight: 600; }
+  .muted { color: #7a8291; }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  .mtype { text-transform: uppercase; letter-spacing: 0.04em; font-size: 10px;
+           padding: 2px 6px; border-radius: 3px; font-weight: 600; }
+  .mtype.moneyline   { background: #1e3a5f; color: #93c5fd; }
+  .mtype.spread      { background: #3a2d6a; color: #c4b5fd; }
+  .mtype.total       { background: #0f4a3a; color: #6ee7b7; }
+  .mtype.team_total  { background: #5a3a1e; color: #fcd34d; }
+  .mtype.player_prop { background: #4c1d3d; color: #f9a8d4; }
+  .book { text-transform: uppercase; letter-spacing: 0.04em; font-size: 10px;
+          padding: 2px 6px; border-radius: 3px; font-weight: 600; margin-left: 4px; }
+  .book.kalshi     { background: #1a3524; color: #86efac; }
+  .book.polymarket { background: #33194d; color: #d8b4fe; }
+  .stat-pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px;
+               font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+  .stat-pill.dry_run { background: #2a3a58; color: #bfdbfe; }
+  .stat-pill.pending { background: #3a2710; color: #fcd34d; }
+  .stat-pill.partial { background: #3a2710; color: #fcd34d; }
+  .stat-pill.filled { background: #0f3a24; color: #6ee7b7; }
+  .stat-pill.error { background: #3b1010; color: #fca5a5; }
+  .stat-pill.pending_adapter { background: #2a2d34; color: #9aa3b2; }
+  a { color: #7dd3fc; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+  <h1>Real Trading <span class="muted" style="font-size:12px;">Kelly 0.25 · $1,000 combined bankroll · same thresholds as paper · per-bet $30 cap · -$100 daily halt</span></h1>
+  <div class="meta"><a href="/">Live EV</a> &nbsp;·&nbsp; <a href="/paper">Paper</a> &nbsp;·&nbsp; <a href="/real">Real Trading</a></div>
+  <div id="banner"></div>
+  <div class="stats" id="stats"></div>
+  <h2>Open positions</h2>
+  <table>
+    <thead><tr>
+      <th>Placed</th><th>Status</th><th>Market</th><th>Matchup</th><th>Selection</th>
+      <th>Fair %</th><th>Edge %</th><th>Fill</th><th>Shares</th><th>Stake</th>
+      <th>Exp. profit</th><th>Start</th>
+    </tr></thead>
+    <tbody id="open"></tbody>
+  </table>
+  <h2>Settled</h2>
+  <table>
+    <thead><tr>
+      <th>Settled</th><th>Market</th><th>Matchup</th><th>Selection</th>
+      <th>Fair %</th><th>Close %</th><th>Fair Δ</th><th>CLV</th>
+      <th>Edge %</th><th>Fill</th><th>Shares</th><th>Stake</th>
+      <th>Result</th><th>Net P&amp;L</th>
+    </tr></thead>
+    <tbody id="settled"></tbody>
+  </table>
+<script>
+function money(x) { return '$' + (x || 0).toFixed(2); }
+function fmtDate(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+function fmtStart(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  const hrs = (d - new Date()) / 3_600_000;
+  const when = d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const delta = hrs >= 0 ? ('in ' + hrs.toFixed(1) + 'h') : (Math.abs(hrs).toFixed(1) + 'h ago');
+  return when + ' <span class="muted">(' + delta + ')</span>';
+}
+function bookBadge(r) {
+  const b = r.book || 'kalshi';
+  return '<span class="book ' + b + '">' + b + '</span>';
+}
+function mtypeCell(r) {
+  const m = r.market_type || 'moneyline';
+  const label = m === 'moneyline' ? 'ML'
+              : m === 'team_total' ? 'TT'
+              : m === 'player_prop' ? 'PROP'
+              : m.slice(0,3).toUpperCase();
+  const period = (r.period_label && r.period_label !== 'FULL') ?
+      ' <span class="muted">' + r.period_label + '</span>' : '';
+  return '<span class="mtype ' + m + '">' + label + '</span>' + bookBadge(r) + period;
+}
+
+function render(data) {
+  const s = data.summary || {};
+  const banner = document.getElementById('banner');
+  if (data.halt) {
+    banner.className = 'banner halt';
+    banner.innerHTML = '<b>HALTED</b> &nbsp;' + (data.halt.reason || '') +
+      ' &nbsp;·&nbsp; today PnL ' + money(s.today_realized_pnl || 0) +
+      ' &nbsp;·&nbsp; resumes at next UTC midnight';
+  } else if (!data.real_trading_enabled) {
+    banner.className = 'banner warn';
+    banner.innerHTML = 'Dry-run mode — REAL_TRADING_ENABLED is not set. Intents are logged but no orders are sent.';
+  } else {
+    banner.className = 'banner live';
+    banner.innerHTML = 'Live trading active. Today PnL: ' + money(s.today_realized_pnl || 0) +
+      ' &nbsp;·&nbsp; halt at ' + money(s.daily_loss_halt_usd || 0);
+  }
+
+  const pnlClass = (s.total_pnl || 0) >= 0 ? 'pos' : 'neg';
+  let fdTile = '<div class="stat"><div class="lbl">Fair Δ</div><div class="val">—</div></div>';
+  if (typeof s.avg_fair_delta === 'number') {
+    const bps = s.avg_fair_delta * 100;
+    const cls = bps >= 0 ? 'pos' : 'neg';
+    const sign = bps >= 0 ? '+' : '';
+    fdTile = '<div class="stat"><div class="lbl">Fair Δ</div>' +
+             '<div class="val ' + cls + '">' + sign + bps.toFixed(2) + ' pp</div></div>';
+  }
+  let clvTile = '<div class="stat"><div class="lbl">Avg CLV</div><div class="val">—</div></div>';
+  if (typeof s.avg_clv === 'number') {
+    const bps = s.avg_clv * 100;
+    const cls = bps >= 0 ? 'pos' : 'neg';
+    const sign = bps >= 0 ? '+' : '';
+    clvTile = '<div class="stat"><div class="lbl">Avg CLV</div>' +
+              '<div class="val ' + cls + '">' + sign + bps.toFixed(2) + ' pp</div></div>';
+  }
+  document.getElementById('stats').innerHTML =
+      '<div class="stat"><div class="lbl">Bankroll</div><div class="val">' + money(data.bankroll) + '</div></div>' +
+      '<div class="stat"><div class="lbl">Kalshi</div><div class="val">' + money(data.kalshi_balance) + '</div></div>' +
+      '<div class="stat"><div class="lbl">Polymarket</div><div class="val">' + money(data.polymarket_balance) + '</div></div>' +
+      '<div class="stat"><div class="lbl">Net P&L</div><div class="val ' + pnlClass + '">' + money(s.total_pnl || 0) + '</div></div>' +
+      '<div class="stat"><div class="lbl">ROI</div><div class="val">' + (s.roi_pct || 0).toFixed(2) + '%</div></div>' +
+      clvTile + fdTile +
+      '<div class="stat"><div class="lbl">Placed</div><div class="val">' + (s.total_placed || 0) +
+        ' <span class="muted" style="font-size:11px;">' +
+        ((s.dry_run||0) ? (s.dry_run + ' dry · ') : '') +
+        ((s.errors||0) ? (s.errors + ' err · ') : '') +
+        ((s.pending_adapter||0) ? (s.pending_adapter + ' stub') : '') +
+        '</span></div></div>' +
+      '<div class="stat"><div class="lbl">Open</div><div class="val">' + (s.open || 0) + '</div></div>' +
+      '<div class="stat"><div class="lbl">Settled</div><div class="val">' + (s.total_settled || 0) +
+        ' <span class="muted" style="font-size:11px;">' + (s.wins || 0) + 'W / ' + (s.losses || 0) + 'L</span></div></div>';
+
+  const openBody = document.getElementById('open');
+  openBody.innerHTML = '';
+  (data.open_positions || []).slice().reverse().forEach(r => {
+    const tr = document.createElement('tr');
+    const edgePct = (typeof r.edge_pct === 'number')
+        ? r.edge_pct
+        : ((r.stake || 0) > 0 ? (r.expected_profit || 0) / r.stake * 100 : 0);
+    const status = r.status || 'pending';
+    tr.innerHTML =
+        '<td class="mono">' + fmtDate(r.placed_at) + '</td>' +
+        '<td><span class="stat-pill ' + status + '">' + status + '</span></td>' +
+        '<td>' + mtypeCell(r) + '</td>' +
+        '<td>' + (r.pin_matchup || '—') + '</td>' +
+        '<td>' + (r.selection || '—') + '</td>' +
+        '<td class="mono">' + ((r.fair_prob || 0) * 100).toFixed(2) + '%</td>' +
+        '<td class="mono pos">' + edgePct.toFixed(2) + '%</td>' +
+        '<td class="mono">' + ((r.avg_fill_price || 0) * 100).toFixed(1) + '¢</td>' +
+        '<td class="mono">' + (r.shares || 0).toLocaleString() + '</td>' +
+        '<td class="mono">' + money(r.stake) + '</td>' +
+        '<td class="mono pos">' + money(r.expected_profit || 0) + '</td>' +
+        '<td class="mono">' + fmtStart(r.pin_start_time) + '</td>';
+    openBody.appendChild(tr);
+  });
+  if (!(data.open_positions || []).length) {
+    openBody.innerHTML = '<tr><td colspan="12" class="muted" style="padding:24px;text-align:center;">no open positions</td></tr>';
+  }
+
+  const settledBody = document.getElementById('settled');
+  settledBody.innerHTML = '';
+  (data.settled || []).slice().reverse().forEach(r => {
+    const tr = document.createElement('tr');
+    const won = r.result === r.side;
+    const resultClass = won ? 'pos' : 'neg';
+    const pnlClass = (r.net_pnl || 0) >= 0 ? 'pos' : 'neg';
+    const edgePct = (typeof r.edge_pct === 'number')
+        ? r.edge_pct
+        : ((r.stake || 0) > 0 ? (r.expected_profit || 0) / r.stake * 100 : 0);
+    let deltaCell = '—';
+    let deltaCls = 'mono';
+    if (typeof r.fair_prob_close === 'number' && typeof r.fair_prob === 'number') {
+      const dpp = (r.fair_prob_close - r.fair_prob) * 100;
+      deltaCls = 'mono ' + (dpp >= 0 ? 'pos' : 'neg');
+      deltaCell = (dpp >= 0 ? '+' : '') + dpp.toFixed(2) + ' pp';
+    }
+    let clvCell = '—';
+    let clvCls = 'mono';
+    if (typeof r.clv === 'number') {
+      const bps = r.clv * 100;
+      clvCls = 'mono ' + (bps >= 0 ? 'pos' : 'neg');
+      clvCell = (bps >= 0 ? '+' : '') + bps.toFixed(2) + ' pp';
+    }
+    tr.innerHTML =
+        '<td class="mono">' + fmtDate(r.settled_at) + '</td>' +
+        '<td>' + mtypeCell(r) + '</td>' +
+        '<td>' + (r.pin_matchup || '—') + '</td>' +
+        '<td>' + (r.selection || '—') + '</td>' +
+        '<td class="mono">' + ((r.fair_prob || 0) * 100).toFixed(2) + '%</td>' +
+        '<td class="mono">' + (typeof r.fair_prob_close === 'number' ? (r.fair_prob_close * 100).toFixed(2) + '%' : '—') + '</td>' +
+        '<td class="' + deltaCls + '">' + deltaCell + '</td>' +
+        '<td class="' + clvCls + '">' + clvCell + '</td>' +
+        '<td class="mono pos">' + edgePct.toFixed(2) + '%</td>' +
+        '<td class="mono">' + ((r.avg_fill_price || 0) * 100).toFixed(1) + '¢</td>' +
+        '<td class="mono">' + (r.shares || 0).toLocaleString() + '</td>' +
+        '<td class="mono">' + money(r.stake) + '</td>' +
+        '<td class="' + resultClass + '">' + (won ? 'WIN' : 'LOSS') + '</td>' +
+        '<td class="mono ' + pnlClass + '">' + money(r.net_pnl || 0) + '</td>';
+    settledBody.appendChild(tr);
+  });
+  if (!(data.settled || []).length) {
+    settledBody.innerHTML = '<tr><td colspan="15" class="muted" style="padding:24px;text-align:center;">no settled bets yet</td></tr>';
+  }
+}
+
+async function tick() {
+  try {
+    const r = await fetch('/api/real');
+    render(await r.json());
+  } catch (e) {}
+}
+tick();
+setInterval(tick, 5000);
+</script>
+</body>
+</html>
+"""
+
+
+@app.route("/real")
+def real_page():
+    return render_template_string(REAL_PAGE)
+
+
+@app.route("/api/real")
+def api_real():
+    return jsonify(real_tracker.snapshot())
+
+
 def main():
     t = threading.Thread(target=scanner_loop, daemon=True)
     t.start()
     paper_tracker.start_settlement_thread()
     paper_tracker.start_close_capture_thread()
+    real_tracker.start_settlement_thread()
+    real_tracker.start_close_capture_thread()
+    real_tracker.start_order_polling_thread()
     host = os.environ.get("EV_DASHBOARD_HOST", "127.0.0.1")
     print(f"dashboard starting on http://{host}:5055")
     app.run(host=host, port=5055, debug=False, use_reloader=False)
