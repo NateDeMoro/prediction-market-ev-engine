@@ -1025,6 +1025,7 @@ def main():
     real_tracker.start_settlement_thread()
     real_tracker.start_close_capture_thread()
     real_tracker.start_order_polling_thread()
+    real_tracker.start_balance_logging_thread()
     host = os.environ.get("EV_DASHBOARD_HOST", "127.0.0.1")
     print(f"dashboard starting on http://{host}:5055")
     app.run(host=host, port=5055, debug=False, use_reloader=False)

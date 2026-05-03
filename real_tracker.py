@@ -67,6 +67,7 @@ REAL_TRADING_ENABLED = os.getenv("REAL_TRADING_ENABLED") == "1"
 SETTLEMENT_POLL_SEC = 30 * 60
 ORDER_POLL_SEC = 5
 CLOSE_CAPTURE_POLL_SEC = pt.CLOSE_CAPTURE_POLL_SEC
+BALANCE_LOG_POLL_SEC = 5 * 60
 
 DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(DIR, "data")
@@ -75,6 +76,7 @@ FILLS_PATH = os.path.join(DATA_DIR, "real_fills.jsonl")
 SETTLEMENTS_PATH = os.path.join(DATA_DIR, "real_settlements.jsonl")
 CLOSES_PATH = os.path.join(DATA_DIR, "real_closes.jsonl")
 HALT_PATH = os.path.join(DATA_DIR, "real_halt.json")
+BALANCE_SNAPSHOT_PATH = os.path.join(DATA_DIR, "balance_snapshots.jsonl")
 
 _TRADE_ADAPTERS = {
     "kalshi": kalshi_trade,
@@ -542,6 +544,19 @@ def _poll_open_orders_once():
             avg_px = info["avg_fill_price"]
         else:
             avg_px = record["avg_fill_price"]
+        # Polymarket's avgPx is always in long-side (YES) perspective. For NO
+        # buys (api_side="no") the actual per-share cost paid is 1 - avgPx,
+        # so flip back into the internal side perspective before storing /
+        # reconciling balance. Kalshi already returns price in the side bought.
+        if (book == "polymarket" and isinstance(avg_px, (int, float))
+                and avg_px > 0):
+            from adapters.polymarket import _parse_market_id
+            slug, long_or_short = _parse_market_id(record["market_id"])
+            if slug:
+                is_long = (long_or_short == "long")
+                api_side = "yes" if (is_long == (record["side"] == "yes")) else "no"
+                if api_side == "no":
+                    avg_px = round(1.0 - avg_px, 6)
         # No state change?
         if (new_status == record["status"] and new_filled == (record.get("filled_count") or 0)):
             continue
@@ -804,6 +819,136 @@ def start_close_capture_thread():
 
 
 # ---------------------------------------------------------------------------
+# Periodic broker-balance snapshot
+# ---------------------------------------------------------------------------
+
+def _snapshot_balances_once():
+    """Query both brokers for actual cash balance, snapshot in-memory open
+    positions, and append the result to data/balance_snapshots.jsonl. Also
+    prints a one-line summary so it surfaces in dashboard.stdout.log."""
+    kalshi_dollars = None
+    poly_dollars = None
+    kalshi_err = None
+    poly_err = None
+    try:
+        kb = kalshi_trade.get_balance()
+        if kb.get("error"):
+            kalshi_err = kb["error"]
+        else:
+            cents = kb.get("balance_cents")
+            if isinstance(cents, (int, float)):
+                kalshi_dollars = round(cents / 100.0, 4)
+    except Exception as e:
+        kalshi_err = f"{type(e).__name__}: {e}"
+    try:
+        pb = polymarket_trade.get_balance()
+        if pb.get("error"):
+            poly_err = pb["error"]
+        else:
+            val = pb.get("balance_dollars")
+            if isinstance(val, (int, float)):
+                poly_dollars = round(val, 4)
+    except Exception as e:
+        poly_err = f"{type(e).__name__}: {e}"
+
+    open_positions = []
+    open_value_kalshi = 0.0
+    open_value_polymarket = 0.0
+    with _lock:
+        for r in _open_positions.values():
+            stake = r.get("stake") or 0.0
+            book = r.get("book")
+            if book == "kalshi":
+                open_value_kalshi += stake
+            elif book == "polymarket":
+                open_value_polymarket += stake
+            open_positions.append({
+                "book": book,
+                "market_id": r.get("market_id"),
+                "side": r.get("side"),
+                "selection": r.get("selection"),
+                "shares": r.get("shares"),
+                "filled_count": r.get("filled_count"),
+                "avg_fill_price": r.get("avg_fill_price"),
+                "stake": stake,
+                "status": r.get("status"),
+                "pin_start_time": r.get("pin_start_time"),
+            })
+        local_kalshi = round(_kalshi_balance, 4)
+        local_polymarket = round(_polymarket_balance, 4)
+
+    open_value_kalshi = round(open_value_kalshi, 4)
+    open_value_polymarket = round(open_value_polymarket, 4)
+    open_value_combined = round(open_value_kalshi + open_value_polymarket, 4)
+
+    # Total portfolio value = broker cash + cost basis of open positions.
+    # Falls back to None per book when the broker call errored, so the JSONL
+    # consumer can tell the difference between "$0 cash" and "balance unknown".
+    total_kalshi = (round(kalshi_dollars + open_value_kalshi, 4)
+                    if kalshi_dollars is not None else None)
+    total_poly = (round(poly_dollars + open_value_polymarket, 4)
+                  if poly_dollars is not None else None)
+    if total_kalshi is not None and total_poly is not None:
+        total_combined = round(total_kalshi + total_poly, 4)
+    else:
+        total_combined = None
+
+    snapshot = {
+        "captured_at": datetime.now(timezone.utc).isoformat(),
+        "broker_balances": {
+            "kalshi_dollars": kalshi_dollars,
+            "polymarket_dollars": poly_dollars,
+            "kalshi_error": kalshi_err,
+            "polymarket_error": poly_err,
+        },
+        "local_balances": {
+            "kalshi_dollars": local_kalshi,
+            "polymarket_dollars": local_polymarket,
+        },
+        "open_position_value": {
+            "kalshi_dollars": open_value_kalshi,
+            "polymarket_dollars": open_value_polymarket,
+            "combined_dollars": open_value_combined,
+        },
+        "total_value": {
+            "kalshi_dollars": total_kalshi,
+            "polymarket_dollars": total_poly,
+            "combined_dollars": total_combined,
+        },
+        "open_positions": open_positions,
+        "open_position_count": len(open_positions),
+    }
+    pt._append_jsonl(BALANCE_SNAPSHOT_PATH, snapshot)
+
+    kalshi_cash_str = f"${kalshi_dollars:.2f}" if kalshi_dollars is not None else f"ERR({kalshi_err})"
+    poly_cash_str = f"${poly_dollars:.2f}" if poly_dollars is not None else f"ERR({poly_err})"
+    kalshi_total_str = f"${total_kalshi:.2f}" if total_kalshi is not None else "n/a"
+    poly_total_str = f"${total_poly:.2f}" if total_poly is not None else "n/a"
+    combined_str = f"${total_combined:.2f}" if total_combined is not None else "n/a"
+    print(f"[real_tracker] balance snapshot: "
+          f"kalshi cash={kalshi_cash_str} total={kalshi_total_str} | "
+          f"polymarket cash={poly_cash_str} total={poly_total_str} | "
+          f"combined_total={combined_str} | "
+          f"open_positions={len(open_positions)} "
+          f"(value k=${open_value_kalshi:.2f} p=${open_value_polymarket:.2f})")
+
+
+def _balance_logging_loop():
+    while True:
+        try:
+            _snapshot_balances_once()
+        except Exception:
+            traceback.print_exc()
+        time.sleep(BALANCE_LOG_POLL_SEC)
+
+
+def start_balance_logging_thread():
+    t = threading.Thread(target=_balance_logging_loop, daemon=True)
+    t.start()
+    return t
+
+
+# ---------------------------------------------------------------------------
 # Snapshot for /api/real
 # ---------------------------------------------------------------------------
 
@@ -811,10 +956,26 @@ def snapshot():
     with _lock:
         open_list = list(_open_positions.values())
         settled = list(_settled_records)
-        kalshi_bal = _kalshi_balance
-        poly_bal = _polymarket_balance
+        kalshi_cash = _kalshi_balance
+        poly_cash = _polymarket_balance
         placements = list(_placements)
 
+    # Add open-position cost basis back into each book's displayed balance so
+    # the dashboard shows portfolio value (cash + locked-in stakes), not just
+    # cash. Without this, every placement looks like a paper loss until the
+    # bet settles. Stakes were already deducted from the cash balance at
+    # placement time, so adding them back reconstructs total worth.
+    open_value_kalshi = 0.0
+    open_value_polymarket = 0.0
+    for r in open_list:
+        stake = r.get("stake") or 0.0
+        if r.get("book") == "kalshi":
+            open_value_kalshi += stake
+        elif r.get("book") == "polymarket":
+            open_value_polymarket += stake
+
+    kalshi_bal = kalshi_cash + open_value_kalshi
+    poly_bal = poly_cash + open_value_polymarket
     bankroll = kalshi_bal + poly_bal
     total_placed = len(placements)
     total_settled = len(settled)
@@ -847,6 +1008,10 @@ def snapshot():
         "bankroll": round(bankroll, 4),
         "kalshi_balance": round(kalshi_bal, 4),
         "polymarket_balance": round(poly_bal, 4),
+        "kalshi_cash": round(kalshi_cash, 4),
+        "polymarket_cash": round(poly_cash, 4),
+        "open_position_value_kalshi": round(open_value_kalshi, 4),
+        "open_position_value_polymarket": round(open_value_polymarket, 4),
         "initial_bankroll": INITIAL_BANKROLL,
         "kelly_fraction": KELLY_FRACTION,
         "halt": halt,
