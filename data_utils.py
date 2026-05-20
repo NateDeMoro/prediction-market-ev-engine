@@ -28,20 +28,14 @@ class RunFlag:
         return self.running
 
 
-def make_logger(log_path):
-    """Return a log(msg) closure that writes `[UTC-timestamp] msg` to both
-    stdout and `log_path`. Silently swallows write errors on the file so a
-    read-only mount can't crash the poller."""
+def make_logger(_log_path=None):
+    """Return a log(msg) closure that prints `[UTC-timestamp] msg` to stdout.
+    The `_log_path` arg is accepted for backwards-compatibility with callers
+    but unused — systemd routes stdout to /dev/null in prod."""
 
     def log(msg):
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        line = f"[{ts}] {msg}"
-        print(line, flush=True)
-        try:
-            with open(log_path, "a") as f:
-                f.write(line + "\n")
-        except OSError:
-            pass
+        print(f"[{ts}] {msg}", flush=True)
 
     return log
 
