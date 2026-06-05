@@ -355,6 +355,36 @@ def pin_sport_for_league(league):
     return LEAGUE_TO_PIN_SPORT.get(league.upper())
 
 
+# Soccer leagues where Pinnacle lines are genuinely sharp (high limits, large
+# two-sided volume). Only these leagues are eligible for soccer bets; all other
+# soccer leagues in LEAGUE_TO_PIN_SPORT are dropped at the matcher layer
+# because devigging a soft Pinnacle line yields phantom edge that mean-reverts
+# before kickoff. Membership is based on Pinnacle sharpness / limit size, NOT
+# on realized per-league P/L (small sample sizes make P/L noisy). To loosen the
+# gate, add a league code here (must also be a key in LEAGUE_TO_PIN_SPORT
+# mapping to "Soccer"). Set env var SOCCER_WHITELIST_DISABLE=1 to bypass for
+# backtesting.
+SHARP_SOCCER_LEAGUES = frozenset({
+    # Big 5 European leagues — unambiguously sharpest Pinnacle soccer markets.
+    "EPL", "LALIGA", "BUNDESLIGA", "SERIEA", "LIGUE1",
+    # Major-liquidity leagues — Pinnacle carries meaningful two-sided action.
+    "EREDIVISIE", "LIGAPORTUGAL", "EFLCHAMPIONSHIP",
+    "MLS", "BRASILEIRAO", "LIGAMX", "BELGIANPL", "SCOTTISHPREM", "SAUDIPL",
+})
+
+
+def soccer_league_whitelisted(league):
+    """True when `league` is an approved sharp-Pinnacle soccer league.
+    Use when: deciding whether to attempt matching for a soccer soft-book market.
+    Returns True unconditionally when SOCCER_WHITELIST_DISABLE=1 is set."""
+    import os
+    if os.getenv("SOCCER_WHITELIST_DISABLE") == "1":
+        return True
+    if not league:
+        return False
+    return league.upper() in SHARP_SOCCER_LEAGUES
+
+
 # Per-league full-team-name allowlists. The sport filter alone (NBA -> Basketball)
 # does not stop a Kalshi NHL ticker for "Colorado" from matching Pinnacle's AHL
 # "Colorado Eagles" -- both are sport=Hockey. Requiring both Pinnacle participants

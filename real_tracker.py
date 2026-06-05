@@ -172,6 +172,21 @@ def _replay_state():
     sum(stake of still-open rows). That matches the live invariant where
     placement deducts `stake` and settlement credits `gross_return`
     (net change = net_pnl per round-trip).
+
+    Fill events are a pure overlay: the latest fill event for a key is the
+    authoritative post-reconcile snapshot for that order. Fields present in
+    the fill event (status, filled_count, avg_fill_price, fee_upfront, stake,
+    cost_reconciled, broker_status) overwrite the placement record's values.
+    Fields absent from the fill event (older partial events predate reconcile
+    persistence) are left as-is from the placement record.
+
+    Because the reconciled `stake` is overlaid from the fill event, the
+    open-position deduction loop needs no special-case formula — it reads
+    the correct actual cost directly from record["stake"]. Full-cancel
+    records replay with status "canceled" and are excluded from open
+    positions (stake not deducted, matching the live full refund).
+    Partial-cancel records replay with effective status "filled" and the
+    reconciled stake, matching the live state.
     """
     global _kalshi_balance, _polymarket_balance
     trades = pt._read_jsonl(TRADES_PATH)
@@ -211,13 +226,22 @@ def _replay_state():
         if not k:
             continue
         _placed_keys.add(k)
-        # Apply latest fill state to the placement record in-memory
+        # Pure overlay: apply the latest fill event fields onto the placement
+        # record. Each field is only overlaid when present in the fill event
+        # so that older partial-fill events (which predate reconcile persistence)
+        # don't accidentally zero out fields that live reconcile populated.
         f = latest_fill.get(k)
         if f:
-            t["status"] = f.get("status") or t.get("status")
-            t["filled_count"] = f.get("filled_count") or t.get("filled_count")
+            if f.get("status"):
+                t["status"] = f["status"]
+            if f.get("filled_count") is not None:
+                t["filled_count"] = f["filled_count"]
             if isinstance(f.get("avg_fill_price"), (int, float)):
                 t["avg_fill_price"] = f["avg_fill_price"]
+            # Reconcile-persisted fields (present only in post-reconcile events).
+            for field in ("fee_upfront", "stake", "cost_reconciled", "broker_status"):
+                if f.get(field) is not None:
+                    t[field] = f[field]
         if k in settled_keys:
             continue
         if t.get("status") in ("pending", "partial", "filled", "ambiguous"):
@@ -231,6 +255,10 @@ def _replay_state():
             _kalshi_balance += pnl
         elif s.get("book") == "polymarket":
             _polymarket_balance += pnl
+    # Deduct open-position cost basis. `stake` is the reconciled actual cost for
+    # positions that have been through _reconcile_filled_cost, and the original
+    # modeled stake for positions that haven't yet been polled (pending/partial).
+    # Both cases correctly reflect cash committed to the broker.
     for p in _open_positions.values():
         cost = p.get("stake") or 0
         if p.get("book") == "kalshi":
@@ -271,6 +299,61 @@ def _credit_book(book, amount):
 
 
 # ---------------------------------------------------------------------------
+# Fill reconciliation
+# ---------------------------------------------------------------------------
+
+def _reconcile_filled_cost(record, avg_px, filled_count, actual_fee=None):
+    """Reconcile the local book balance against a known fill price.
+
+    Caller must already hold `_lock` — non-reentrant, do not re-acquire
+    inside this function (same convention as paper_tracker._stake_on_matchup).
+
+    Idempotent: returns immediately if record["cost_reconciled"] is already set
+    or avg_px is not numeric. Always sets cost_reconciled=True before returning.
+
+    Fee resolution (priority order):
+      1. actual_fee (real fee from broker response) — use when numeric.
+      2. Modeled fallback:
+           - Full fill (filled_count == shares): reuse record["fee_upfront"].
+           - Partial fill: prorate record["fee_upfront"] by filled_count/shares.
+         The prorated value is written back to record["fee_upfront"] so that
+         _settle_one's independent `total_stake = avg_fill * filled_count + fee_upfront`
+         stays consistent.
+
+    Sets record["stake"] = actual_cost so snapshot() and replay deduct the
+    correct amount. Calls _credit_book for the refund only when abs(refund) > 0.01
+    to avoid noise from rounding (flag is set regardless).
+    """
+    if record.get("cost_reconciled"):
+        return
+    if not isinstance(avg_px, (int, float)):
+        return
+
+    shares = record.get("shares") or 1  # guard against zero-div; malformed record
+    book = record.get("book")
+
+    if isinstance(actual_fee, (int, float)):
+        effective_fee = actual_fee
+    else:
+        modeled_fee = record.get("fee_upfront") or 0.0
+        if filled_count < shares:
+            effective_fee = modeled_fee * (filled_count / shares) if shares else 0.0
+        else:
+            effective_fee = modeled_fee
+
+    # Write back so _settle_one reads the reconciled fee without special-casing.
+    record["fee_upfront"] = effective_fee
+
+    actual_cost = avg_px * filled_count + effective_fee
+    refund = record.get("stake", 0.0) - actual_cost
+    record["stake"] = actual_cost
+    record["cost_reconciled"] = True
+
+    if abs(refund) > 0.01:
+        _credit_book(book, refund)
+
+
+# ---------------------------------------------------------------------------
 # Order placement
 # ---------------------------------------------------------------------------
 
@@ -295,6 +378,11 @@ def _place_kalshi_order(record):
     record["status"] = resp.get("status") or "pending"
     record["filled_count"] = resp.get("filled_count") or 0
     record["remaining_count"] = resp.get("remaining_count") or count
+    # Capture actual fill price when the order fills immediately (Kalshi
+    # `executed` → status `filled`). Resting orders return None here, which
+    # correctly leaves the modeled VWAP in place until the poll loop fills them.
+    if isinstance(resp.get("avg_fill_price"), (int, float)):
+        record["avg_fill_price"] = resp["avg_fill_price"]
     return resp
 
 
@@ -506,6 +594,26 @@ def maybe_place(row, ladder, now=None):
     record["placement_response"] = resp
 
     with _lock:
+        # Terminal status from a 2xx with no fill (rejected/expired/canceled):
+        # stake was deducted pre-placement, refund it. _open_positions admission
+        # below already excludes these statuses, so no further handling needed.
+        if (record["status"] in ("rejected", "expired", "canceled")
+                and (record.get("filled_count") or 0) == 0
+                and not resp.get("error")):
+            _credit_book(book, record["stake"])
+            record["cost_reconciled"] = True
+        # Immediate-fill reconciliation: reconcile before writing the trade row so
+        # the persisted record carries the actual cost. Partial fills on Kalshi
+        # present as status `pending` (Kalshi `resting` with fill_count > 0), not
+        # `filled`, so they are not reconciled here — the poll loop handles them
+        # on their next status transition.
+        elif (record["status"] == "filled"
+                and isinstance(record.get("avg_fill_price"), (int, float))):
+            actual_fee = resp.get("taker_fees")
+            _reconcile_filled_cost(
+                record, record["avg_fill_price"], record["filled_count"],
+                actual_fee=actual_fee if isinstance(actual_fee, (int, float)) else None,
+            )
         pt._append_jsonl(TRADES_PATH, record)
         _placements.append(record)
         if record["status"] in ("pending", "partial", "filled", "ambiguous"):
@@ -519,9 +627,18 @@ def maybe_place(row, ladder, now=None):
 # ---------------------------------------------------------------------------
 
 def _poll_open_orders_once():
+    # Admit pending/partial orders and — defensively — any filled order that
+    # hasn't yet been reconciled (e.g. avg_fill_price was None on the first fill
+    # observation; the comment in the old code promising "the next poll will retry"
+    # was incorrect because the filter excluded filled orders entirely).
     with _lock:
-        live = [r for r in _open_positions.values()
-                if r.get("status") in ("pending", "partial") and r.get("order_id")]
+        live = [
+            r for r in _open_positions.values()
+            if r.get("order_id") and (
+                r.get("status") in ("pending", "partial")
+                or (r.get("status") == "filled" and not r.get("cost_reconciled"))
+            )
+        ]
     for record in live:
         book = record.get("book")
         adapter_mod = _TRADE_ADAPTERS.get(book)
@@ -543,7 +660,7 @@ def _poll_open_orders_once():
         elif isinstance(info.get("avg_fill_price"), (int, float)):
             avg_px = info["avg_fill_price"]
         else:
-            avg_px = record["avg_fill_price"]
+            avg_px = None  # don't fall back to the record's (possibly modeled) price
         # Polymarket's avgPx is always in long-side (YES) perspective. For NO
         # buys (api_side="no") the actual per-share cost paid is 1 - avgPx,
         # so flip back into the internal side perspective before storing /
@@ -557,36 +674,82 @@ def _poll_open_orders_once():
                 api_side = "yes" if (is_long == (record["side"] == "yes")) else "no"
                 if api_side == "no":
                     avg_px = round(1.0 - avg_px, 6)
-        # No state change?
-        if (new_status == record["status"] and new_filled == (record.get("filled_count") or 0)):
+
+        is_defensive_retry = (record.get("status") == "filled"
+                              and not record.get("cost_reconciled"))
+        state_changed = (new_status != record["status"]
+                         or new_filled != (record.get("filled_count") or 0))
+        # Skip if nothing changed, unless this is a defensive retry that now has
+        # a usable fill price (reconcile it even without a status transition).
+        if not state_changed and not (is_defensive_retry and isinstance(avg_px, (int, float))):
             continue
-        fill_event = {
-            "observed_at": datetime.now(timezone.utc).isoformat(),
-            "book": record["book"],
-            "market_id": record["market_id"],
-            "side": record["side"],
-            "order_id": record["order_id"],
-            "status": new_status,
-            "filled_count": new_filled,
-            "remaining_count": info.get("remaining_count") or 0,
-            "avg_fill_price": round(avg_px, 6) if isinstance(avg_px, (int, float)) else None,
-        }
+
         with _lock:
+            # Update record state from the latest broker observation.
+            if isinstance(avg_px, (int, float)):
+                record["avg_fill_price"] = avg_px
+            record["filled_count"] = new_filled
+            # Reconcile / terminal handling BEFORE emitting the fill event so the
+            # persisted event reflects the post-reconcile state (fee_upfront, stake,
+            # cost_reconciled). The old order emitted the event first, persisting
+            # the pre-reconcile modeled fee — that is the bug being fixed here.
+            actual_fee = info.get("taker_fees")
+            if not isinstance(actual_fee, (int, float)):
+                actual_fee = None
+
+            if new_status in ("canceled", "rejected", "expired"):
+                if new_filled == 0:
+                    # Full terminal: refund the entire deducted stake, mark
+                    # reconciled, remove from open positions. Status is kept
+                    # as the broker terminal value — settlement already skips
+                    # non-filled positions, so no extra gate is needed.
+                    _credit_book(book, record.get("stake", 0.0))
+                    record["cost_reconciled"] = True
+                    record["status"] = new_status
+                    _open_positions.pop(_record_key(record), None)
+                else:
+                    # Partial fill then canceled: reconcile the filled portion
+                    # (refunds the unfilled remainder; prorates or uses real fee),
+                    # then promote to "filled" so _settle_one resolves the partial.
+                    # Store the broker's terminal status for audit purposes.
+                    _reconcile_filled_cost(
+                        record, avg_px if isinstance(avg_px, (int, float)) else record.get("avg_fill_price"),
+                        new_filled, actual_fee=actual_fee,
+                    )
+                    record["broker_status"] = new_status
+                    record["status"] = "filled"
+            elif new_status == "filled":
+                record["status"] = new_status
+                _reconcile_filled_cost(
+                    record, avg_px if isinstance(avg_px, (int, float)) else record.get("avg_fill_price"),
+                    new_filled, actual_fee=actual_fee,
+                )
+            else:
+                record["status"] = new_status
+
+            # Emit the fill event AFTER reconciliation so it carries the
+            # authoritative post-reconcile snapshot. Replay overlays these
+            # fields onto the placement record (see _replay_state).
+            fill_event = {
+                "observed_at": datetime.now(timezone.utc).isoformat(),
+                "book": record["book"],
+                "market_id": record["market_id"],
+                "side": record["side"],
+                "order_id": record["order_id"],
+                "status": record["status"],
+                "filled_count": record.get("filled_count"),
+                "remaining_count": info.get("remaining_count") or 0,
+                "avg_fill_price": (round(record["avg_fill_price"], 6)
+                                   if isinstance(record.get("avg_fill_price"), (int, float))
+                                   else None),
+                "fee_upfront": record.get("fee_upfront"),
+                "stake": record.get("stake"),
+                "cost_reconciled": record.get("cost_reconciled"),
+            }
+            if record.get("broker_status"):
+                fill_event["broker_status"] = record["broker_status"]
             pt._append_jsonl(FILLS_PATH, fill_event)
             _fills.append(fill_event)
-            record["status"] = new_status
-            record["filled_count"] = new_filled
-            record["avg_fill_price"] = avg_px if isinstance(avg_px, (int, float)) else record["avg_fill_price"]
-            # Reconcile balance: actual cost may differ from intended.
-            # Only run when avg_px is numeric — otherwise treating None as 0 cost
-            # would refund the full stake even though real cash was committed.
-            # Skip this cycle; the next poll will retry once the price arrives.
-            if new_status in ("filled",) and isinstance(avg_px, (int, float)):
-                actual_cost = avg_px * new_filled
-                actual_cost += record.get("fee_upfront") or 0
-                refund = (record["stake"] - actual_cost)
-                if abs(refund) > 0.01:
-                    _credit_book(record["book"], refund)
 
 
 def _order_polling_loop():

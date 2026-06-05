@@ -216,6 +216,7 @@ def place_limit_order(ticker: str, side: str, count: int, limit_cents: int,
         "filled_count": _int_fp(order.get("fill_count_fp")),
         "remaining_count": _int_fp(order.get("remaining_count_fp")),
         "avg_fill_price": _avg_fill_dollars(order),
+        "taker_fees": _taker_fees_dollars(order),
         "raw": resp,
     }
 
@@ -228,6 +229,33 @@ def _avg_fill_dollars(order: dict):
         count = float(order.get("fill_count_fp") or 0)
         if count > 0:
             return round(cost / count, 6)
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
+def _taker_fees_dollars(order: dict):
+    """Total taker fees charged for this order, in dollars. Returns None for
+    resting / zero-fill orders where no fee has been charged yet.
+
+    TODO: confirm the exact field name against a live order response before
+    trusting this value. Candidates (Kalshi exposes *_dollars and *_cents
+    variants for other cost fields):
+      - taker_fees_dollars  (preferred — mirrors taker_fill_cost_dollars)
+      - taker_fees_cents ÷ 100
+    Verify via:  kalshi_trade.get_order(<recent_order_id>)["raw"]
+    """
+    try:
+        # Prefer the dollars variant; fall back to cents ÷ 100.
+        val = order.get("taker_fees_dollars")
+        if val is None:
+            cents = order.get("taker_fees_cents")
+            if cents is not None:
+                val = float(cents) / 100.0
+        if val is not None:
+            fee = float(val)
+            if fee > 0:
+                return round(fee, 6)
     except (TypeError, ValueError):
         pass
     return None
@@ -248,6 +276,7 @@ def get_order(order_id: str) -> dict:
         "filled_count": _int_fp(order.get("fill_count_fp")),
         "remaining_count": _int_fp(order.get("remaining_count_fp")),
         "avg_fill_price": _avg_fill_dollars(order),
+        "taker_fees": _taker_fees_dollars(order),
         "raw": resp,
     }
 

@@ -26,6 +26,7 @@ from adapters.common import (
     league_team_allowlist,
     pin_sport_for_league,
     player_key,
+    soccer_league_whitelisted,
     team_in_league,
 )
 
@@ -184,6 +185,7 @@ def _anchor_for(soft):
 
 
 _unknown_leagues_seen = set()
+_not_whitelisted_leagues_seen = set()
 
 
 def match_markets(pin_rows, soft_moneylines):
@@ -206,6 +208,7 @@ def match_markets(pin_rows, soft_moneylines):
         "pin_moneyline_scope": len(pin_mls),
         "title_parse_fail": 0,
         "unknown_league": 0,
+        "league_not_whitelisted": 0,
         "no_candidate": 0,
         "time_out_of_tolerance": 0,
         "name_postcheck_failed": 0,
@@ -218,7 +221,7 @@ def match_markets(pin_rows, soft_moneylines):
         d = stats["by_book"].setdefault(
             book,
             {"total": 0, "matched": 0, "title_parse_fail": 0,
-             "unknown_league": 0, "no_candidate": 0,
+             "unknown_league": 0, "league_not_whitelisted": 0, "no_candidate": 0,
              "time_out_of_tolerance": 0, "name_postcheck_failed": 0},
         )
         d[bucket] = d.get(bucket, 0) + 1
@@ -251,6 +254,20 @@ def match_markets(pin_rows, soft_moneylines):
             stats["unknown_league"] += 1
             bump_book(nm.book, "unknown_league")
             unmatched_soft.append(UnmatchedSoft(soft=nm, reason="unknown_league"))
+            continue
+        # Soccer league whitelist: only allow leagues where Pinnacle lines are
+        # genuinely sharp. Minor/low-liquidity leagues produce phantom edge
+        # (Pinnacle's devigged "fair" price mean-reverts before kickoff).
+        # Non-soccer sports are unaffected. Bypass with SOCCER_WHITELIST_DISABLE=1.
+        if expected_sport == "Soccer" and not soccer_league_whitelisted(nm.league):
+            league_key = (nm.book, nm.league)
+            if league_key not in _not_whitelisted_leagues_seen:
+                _not_whitelisted_leagues_seen.add(league_key)
+                print(f"[matcher] dropping non-whitelisted soccer league {nm.league!r} on {nm.book} "
+                      f"— add to SHARP_SOCCER_LEAGUES in adapters/common.py to enable")
+            stats["league_not_whitelisted"] += 1
+            bump_book(nm.book, "league_not_whitelisted")
+            unmatched_soft.append(UnmatchedSoft(soft=nm, reason="league_not_whitelisted"))
             continue
         # Same-sport collision gate: require both Pinnacle participants to be
         # in the league's team allowlist (closes the NHL-vs-AHL and
