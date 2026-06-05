@@ -50,6 +50,12 @@ data/paper_trades.jsonl
 data/paper_settlements.jsonl
 data/paper_closes.jsonl
 data/sanity_rejected.jsonl
+data/real_trades.jsonl
+data/real_fills.jsonl
+data/real_settlements.jsonl
+data/real_closes.jsonl
+data/real_halt.json
+data/balance_snapshots.jsonl
 
 # Probe artifacts (NOTES.md inside each is also ignored by *.md rule above)
 data/kalshi_probe/
