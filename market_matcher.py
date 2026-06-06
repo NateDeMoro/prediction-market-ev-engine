@@ -27,6 +27,7 @@ from adapters.common import (
     pin_sport_for_league,
     player_key,
     soccer_league_whitelisted,
+    soccer_ml_enabled,
     team_in_league,
 )
 
@@ -186,6 +187,7 @@ def _anchor_for(soft):
 
 _unknown_leagues_seen = set()
 _not_whitelisted_leagues_seen = set()
+_soccer_ml_blocked_logged = False
 
 
 def match_markets(pin_rows, soft_moneylines):
@@ -208,6 +210,7 @@ def match_markets(pin_rows, soft_moneylines):
         "pin_moneyline_scope": len(pin_mls),
         "title_parse_fail": 0,
         "unknown_league": 0,
+        "soccer_ml_blocked": 0,
         "league_not_whitelisted": 0,
         "no_candidate": 0,
         "time_out_of_tolerance": 0,
@@ -221,8 +224,8 @@ def match_markets(pin_rows, soft_moneylines):
         d = stats["by_book"].setdefault(
             book,
             {"total": 0, "matched": 0, "title_parse_fail": 0,
-             "unknown_league": 0, "league_not_whitelisted": 0, "no_candidate": 0,
-             "time_out_of_tolerance": 0, "name_postcheck_failed": 0},
+             "unknown_league": 0, "soccer_ml_blocked": 0, "league_not_whitelisted": 0,
+             "no_candidate": 0, "time_out_of_tolerance": 0, "name_postcheck_failed": 0},
         )
         d[bucket] = d.get(bucket, 0) + 1
 
@@ -254,6 +257,20 @@ def match_markets(pin_rows, soft_moneylines):
             stats["unknown_league"] += 1
             bump_book(nm.book, "unknown_league")
             unmatched_soft.append(UnmatchedSoft(soft=nm, reason="unknown_league"))
+            continue
+        # Soccer moneyline block: soccer ML is EV-negative in aggregate; disabled by
+        # default. Set SOCCER_ML_ENABLED=1 to re-enable (still subject to the league
+        # whitelist below). Does not affect soccer spreads/totals/props or non-soccer ML.
+        # Does not affect settlement of already-open positions.
+        if expected_sport == "Soccer" and not soccer_ml_enabled():
+            global _soccer_ml_blocked_logged
+            if not _soccer_ml_blocked_logged:
+                _soccer_ml_blocked_logged = True
+                print("[matcher] soccer moneylines blocked by default "
+                      "— set SOCCER_ML_ENABLED=1 to re-enable")
+            stats["soccer_ml_blocked"] += 1
+            bump_book(nm.book, "soccer_ml_blocked")
+            unmatched_soft.append(UnmatchedSoft(soft=nm, reason="soccer_ml_blocked"))
             continue
         # Soccer league whitelist: only allow leagues where Pinnacle lines are
         # genuinely sharp. Minor/low-liquidity leagues produce phantom edge

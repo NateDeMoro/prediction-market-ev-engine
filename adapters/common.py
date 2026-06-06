@@ -385,6 +385,16 @@ def soccer_league_whitelisted(league):
     return league.upper() in SHARP_SOCCER_LEAGUES
 
 
+def soccer_ml_enabled():
+    """True only when SOCCER_ML_ENABLED=1 is explicitly set; default (unset) means blocked.
+    Use when: deciding whether to match soccer moneylines at all (placement/display gate).
+    Note: inverse polarity vs SOCCER_WHITELIST_DISABLE — this is an *_ENABLED flag, not
+    a *_DISABLE flag. Controls placement and dashboard display only, not settlement of
+    already-open positions."""
+    import os
+    return os.getenv("SOCCER_ML_ENABLED") == "1"
+
+
 # Per-league full-team-name allowlists. The sport filter alone (NBA -> Basketball)
 # does not stop a Kalshi NHL ticker for "Colorado" from matching Pinnacle's AHL
 # "Colorado Eagles" -- both are sport=Hockey. Requiring both Pinnacle participants
