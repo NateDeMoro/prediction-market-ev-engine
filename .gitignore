@@ -17,7 +17,6 @@ instructions.txt
 
 # Claude Code local config
 .claude/
-CLAUDE.md
 
 # Python
 __pycache__/
