@@ -27,9 +27,9 @@ from adapters.common import (
     pin_sport_for_league,
     player_key,
     soccer_league_whitelisted,
-    soccer_ml_enabled,
     team_in_league,
 )
+from market_config import market_enabled
 
 PIN_PERIOD_LABEL = {0: "FULL", 1: "1H", 2: "2H"}
 PERIOD_LABEL_TO_INT = {v: k for k, v in PIN_PERIOD_LABEL.items()}
@@ -187,7 +187,6 @@ def _anchor_for(soft):
 
 _unknown_leagues_seen = set()
 _not_whitelisted_leagues_seen = set()
-_soccer_ml_blocked_logged = False
 
 
 def match_markets(pin_rows, soft_moneylines):
@@ -210,7 +209,6 @@ def match_markets(pin_rows, soft_moneylines):
         "pin_moneyline_scope": len(pin_mls),
         "title_parse_fail": 0,
         "unknown_league": 0,
-        "soccer_ml_blocked": 0,
         "league_not_whitelisted": 0,
         "no_candidate": 0,
         "time_out_of_tolerance": 0,
@@ -224,7 +222,7 @@ def match_markets(pin_rows, soft_moneylines):
         d = stats["by_book"].setdefault(
             book,
             {"total": 0, "matched": 0, "title_parse_fail": 0,
-             "unknown_league": 0, "soccer_ml_blocked": 0, "league_not_whitelisted": 0,
+             "unknown_league": 0, "league_not_whitelisted": 0,
              "no_candidate": 0, "time_out_of_tolerance": 0, "name_postcheck_failed": 0},
         )
         d[bucket] = d.get(bucket, 0) + 1
@@ -257,20 +255,6 @@ def match_markets(pin_rows, soft_moneylines):
             stats["unknown_league"] += 1
             bump_book(nm.book, "unknown_league")
             unmatched_soft.append(UnmatchedSoft(soft=nm, reason="unknown_league"))
-            continue
-        # Soccer moneyline block: soccer ML is EV-negative in aggregate; disabled by
-        # default. Set SOCCER_ML_ENABLED=1 to re-enable (still subject to the league
-        # whitelist below). Does not affect soccer spreads/totals/props or non-soccer ML.
-        # Does not affect settlement of already-open positions.
-        if expected_sport == "Soccer" and not soccer_ml_enabled():
-            global _soccer_ml_blocked_logged
-            if not _soccer_ml_blocked_logged:
-                _soccer_ml_blocked_logged = True
-                print("[matcher] soccer moneylines blocked by default "
-                      "— set SOCCER_ML_ENABLED=1 to re-enable")
-            stats["soccer_ml_blocked"] += 1
-            bump_book(nm.book, "soccer_ml_blocked")
-            unmatched_soft.append(UnmatchedSoft(soft=nm, reason="soccer_ml_blocked"))
             continue
         # Soccer league whitelist: only allow leagues where Pinnacle lines are
         # genuinely sharp. Minor/low-liquidity leagues produce phantom edge
@@ -660,6 +644,8 @@ def match_all_markets(pin_rows, soft_markets):
         "no_line_match": 0,
         "side_unresolved": 0,
         "team_total_side_missing": 0,
+        "market_disabled": 0,
+        "moneyline_disabled": 0,
         "prop_pin_scope": len(pin_prop_rows),
         "prop_unmatched_reasons": {
             "combo_stat_no_pinnacle": 0,
@@ -691,6 +677,10 @@ def match_all_markets(pin_rows, soft_markets):
         pin_info = event_to_pin.get((nm.book, sfx))
         if not pin_info:
             stats["no_event_match"] += 1
+            continue
+
+        if not market_enabled(nm.book, pin_info["sport"], nm.league, nm.market_type):
+            stats["market_disabled"] += 1
             continue
 
         # Player props route via a separate Pinnacle index keyed by
@@ -877,6 +867,9 @@ def match_all_markets(pin_rows, soft_markets):
         pair = _ml_match_to_pair(m)
         if pair is None:
             ml_unresolved += 1
+            continue
+        if not market_enabled(pair.market.book, pair.pin_sport, pair.market.league, "moneyline"):
+            stats["moneyline_disabled"] += 1
             continue
         ml_pairs.append(pair)
     stats["moneyline_three_way_matched"] = ml_three_way
