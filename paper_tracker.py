@@ -568,9 +568,9 @@ def _capture_close_for(record, pin_rows, now):
     if start is None:
         return None
     dt_to_start = (start - now).total_seconds()
-    if not is_prop and dt_to_start > CLOSE_CAPTURE_LEAD_SEC:
+    if not is_prop and dt_to_start > config.CLOSE_CAPTURE_LEAD_SEC:
         return None
-    if dt_to_start < -CLOSE_CAPTURE_TRAIL_SEC:
+    if dt_to_start < -config.CLOSE_CAPTURE_TRAIL_SEC:
         return None
 
     found = _find_pin_prices(pin_rows, record)
@@ -825,8 +825,8 @@ def snapshot():
 
     return {
         "bankroll": round(bankroll, 4),
-        "initial_bankroll": INITIAL_BANKROLL,
-        "kelly_fraction": KELLY_FRACTION,
+        "initial_bankroll": config.PAPER_INITIAL_BANKROLL,
+        "kelly_fraction": config.KELLY_FRACTION,
         "open_positions": open_list,
         "settled": settled,
         "summary": {

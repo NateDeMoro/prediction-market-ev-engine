@@ -22,6 +22,8 @@ import os
 import re
 import time
 import hashlib
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 import requests
 
@@ -45,12 +47,15 @@ if not API_KEY:
         "systemd EnvironmentFile (.env) before starting the poller."
     )
 
-POLL_INTERVAL_SEC    = config.POLLER_INTERVAL_SEC
-WINDOW_HOURS         = config.PINNACLE_WINDOW_HOURS
-LIVE_LOOKBACK_HOURS  = config.PINNACLE_LIVE_LOOKBACK_HOURS
-REQUEST_TIMEOUT      = config.POLLER_REQUEST_TIMEOUT
-INTER_REQUEST_SLEEP  = config.PINNACLE_INTER_REQUEST_SLEEP
-SNAPSHOT_RETENTION   = config.POLLER_SNAPSHOT_RETENTION
+POLL_INTERVAL_SEC      = config.POLLER_INTERVAL_SEC
+WINDOW_HOURS           = config.PINNACLE_WINDOW_HOURS
+LIVE_LOOKBACK_HOURS    = config.PINNACLE_LIVE_LOOKBACK_HOURS
+REQUEST_TIMEOUT        = config.POLLER_REQUEST_TIMEOUT
+INTER_REQUEST_SLEEP    = config.PINNACLE_INTER_REQUEST_SLEEP
+MAX_WORKERS            = config.PINNACLE_MAX_WORKERS
+RATE_LIMIT_RETRIES     = config.PINNACLE_RATE_LIMIT_RETRIES
+RATE_LIMIT_BACKOFF_SEC = config.PINNACLE_RATE_LIMIT_BACKOFF_SEC
+SNAPSHOT_RETENTION     = config.POLLER_SNAPSHOT_RETENTION
 
 # Player-prop ingestion: 2 extra calls per parent matchup. PROP_SPORTS is a
 # cheap first-pass on Pinnacle's broad sport name; PROP_LEAGUES is the precise
@@ -79,12 +84,34 @@ HEADERS = {
 _running = RunFlag()
 log = make_logger(LOG_PATH)
 
+# Global rate gate: request starts are spaced INTER_REQUEST_SLEEP apart across all threads.
+# Initialized at import and intentionally persisted across cycles — never reset.
+_rate_lock = threading.Lock()
+_next_slot = time.monotonic()
+
 
 def get(path, **params):
-    time.sleep(INTER_REQUEST_SLEEP)
-    r = requests.get(f"{BASE}{path}", headers=HEADERS, params=params, timeout=REQUEST_TIMEOUT)
-    r.raise_for_status()
-    return r.json()
+    global _next_slot
+    for attempt in range(RATE_LIMIT_RETRIES + 1):
+        with _rate_lock:
+            now = time.monotonic()
+            wake_at = max(now, _next_slot)
+            _next_slot = wake_at + INTER_REQUEST_SLEEP
+        gap = wake_at - time.monotonic()
+        if gap > 0:
+            time.sleep(gap)
+        r = requests.get(f"{BASE}{path}", headers=HEADERS, params=params, timeout=REQUEST_TIMEOUT)
+        if r.status_code == 429 and attempt < RATE_LIMIT_RETRIES:
+            ra = r.headers.get("Retry-After")
+            try:
+                backoff = float(ra) if ra else RATE_LIMIT_BACKOFF_SEC * (2 ** attempt)
+            except ValueError:
+                backoff = RATE_LIMIT_BACKOFF_SEC * (2 ** attempt)
+            with _rate_lock:
+                _next_slot = max(_next_slot, time.monotonic() + backoff)
+            continue
+        r.raise_for_status()
+        return r.json()
 
 
 def fetch_sports():
@@ -271,24 +298,24 @@ def record_market(market, matchup, sport_name, is_live, snapshot,
     return changed
 
 
-def collect_prop_rows(parent_matchup, sport_name, snapshot, prev_fps, new_fps):
-    """For a pregame parent matchup in a prop-target league, fetch and emit
-    per-player prop rows. Two HTTP calls: /related (enumerate child matchups +
-    player/stat metadata) and /markets/related/straight (price rows for the
-    whole tree). Returns (rows_emitted, changes_emitted) or (0, 0) on skip.
+def collect_prop_rows(parent_matchup, sport_name, prev_fps):
+    """For a pregame parent matchup in a prop-target league, fetch per-player prop rows.
+    Two HTTP calls: /related (enumerate child matchups + player/stat metadata) and
+    /markets/related/straight (price rows for the whole tree).
+    Returns (rows, fp_updates, log_lines, error_msg). Side-effect-free: no shared-state
+    mutation; the main thread applies the returned data. error_msg is None on success.
     """
     parent_id = parent_matchup["id"]
     try:
         related = fetch_related_matchups(parent_id)
-    except requests.HTTPError as e:
-        log(f"  ! prop /related failed for {parent_id}: {e}")
-        return 0, 0
+    except requests.RequestException as e:
+        return [], {}, [], f"  ! prop /related failed for {parent_id}: {e}"
 
     # Verify league via the parent record returned in /related (carries league.name).
     parent_rec = next((m for m in related if m.get("id") == parent_id), None)
     league_name = ((parent_rec or {}).get("league") or {}).get("name")
     if league_name not in PROP_LEAGUES:
-        return 0, 0
+        return [], {}, [], None
 
     # Build child_matchupId -> (player, stat, units) for every player-prop child.
     prop_meta = {}
@@ -304,18 +331,18 @@ def collect_prop_rows(parent_matchup, sport_name, snapshot, prev_fps, new_fps):
         prop_meta[m["id"]] = (player, stat, m.get("units"))
 
     if not prop_meta:
-        return 0, 0
+        return [], {}, [], None
 
     try:
         markets = fetch_live_matchup_markets(parent_id)
-    except requests.HTTPError as e:
-        log(f"  ! prop markets failed for {parent_id}: {e}")
-        return 0, 0
+    except requests.RequestException as e:
+        return [], {}, [], f"  ! prop markets failed for {parent_id}: {e}"
 
     home, away = matchup_participants(parent_matchup)
     matchup_str = f"{home} vs {away}"
-    rows_emitted = 0
-    changes_emitted = 0
+    rows = []
+    fp_updates = {}
+    log_lines = []
     for mk in markets:
         prop_id = mk.get("matchupId")
         if prop_id not in prop_meta:
@@ -328,7 +355,7 @@ def collect_prop_rows(parent_matchup, sport_name, snapshot, prev_fps, new_fps):
         # Custom fingerprint key: prop child id is unique per (player, stat).
         k = f"prop|{prop_id}"
         fp = market_fingerprint(mk)
-        new_fps[k] = fp
+        fp_updates[k] = fp
         if prev_fps.get(k) != fp:
             tag = "NEW" if prev_fps.get(k) is None else "CHG"
             ps = " | ".join(
@@ -336,10 +363,9 @@ def collect_prop_rows(parent_matchup, sport_name, snapshot, prev_fps, new_fps):
                 if isinstance(p.get('price'), int) else f"{p.get('participantId','?')}={p.get('price')}"
                 for p in prices
             )
-            log(f"{tag} {matchup_str} PROP {player} ({stat}) line={line}: {ps}")
-            changes_emitted += 1
+            log_lines.append(f"{tag} {matchup_str} PROP {player} ({stat}) line={line}: {ps}")
 
-        snapshot.append({
+        rows.append({
             "sport": sport_name,
             "league": league_name,
             "matchupId": parent_id,
@@ -355,9 +381,8 @@ def collect_prop_rows(parent_matchup, sport_name, snapshot, prev_fps, new_fps):
             "line": line,
             "prices": prices,
         })
-        rows_emitted += 1
 
-    return rows_emitted, changes_emitted
+    return rows, fp_updates, log_lines, None
 
 
 def run_cycle(prev_fps):
@@ -374,6 +399,11 @@ def run_cycle(prev_fps):
     market_count = 0
     prop_row_count = 0
     snapshot = []
+
+    # Phase A: serial per-sport fetches. Record bulk (pregame) markets inline;
+    # accumulate work lists for the parallel phases below.
+    live_work = []   # (sub, sport_name)
+    prop_work = []   # (parent, sport_name)
 
     for sport in sports:
         sid = sport["id"]
@@ -408,35 +438,60 @@ def run_cycle(prev_fps):
                              snapshot, prev_fps, new_fps, log):
                 changes += 1
 
-        # Live markets: one fetch per live sub-matchup.
         for sub in live:
-            try:
-                lm = fetch_live_matchup_markets(sub["id"])
-            except requests.HTTPError as e:
-                log(f"  ! live market fetch failed for {sub['id']}: {e}")
-                continue
-            for market in lm:
-                # Only take markets that belong to this specific sub-matchup
-                # (the related/straight response includes sibling-sub props).
-                if market.get("matchupId") != sub["id"]:
-                    continue
-                market = inject_designation(market, sub)
-                market_count += 1
-                if record_market(market, sub, sname, True,
-                                 snapshot, prev_fps, new_fps, log):
-                    changes += 1
+            live_work.append((sub, sname))
 
         # Player props: 2 extra calls per pregame parent in NBA/NHL. Pre-filter
-        # by league.name (carried on every raw matchup) so we don't burn calls
-        # on Brazilian NBB / AHL / KHL / Euroleague etc. — Kalshi has no prop
-        # series for those, so any matches would be impossible.
+        # by league.name so we don't burn calls on non-prop leagues.
         if INCLUDE_PROPS and sname in PROP_SPORTS:
             for parent in pregame:
                 if ((parent.get("league") or {}).get("name")) not in PROP_LEAGUES:
                     continue
-                rows, ch = collect_prop_rows(parent, sname, snapshot, prev_fps, new_fps)
-                prop_row_count += rows
-                changes += ch
+                prop_work.append((parent, sname))
+
+    # Phase B: parallel live market fetch and merge.
+    if live_work and _running:
+        def fetch_live(sub, sport_name):
+            try:
+                return sub, sport_name, fetch_live_matchup_markets(sub["id"]), None
+            except requests.RequestException as e:
+                return sub, sport_name, [], e
+
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+            futures = [ex.submit(fetch_live, sub, sname) for sub, sname in live_work]
+            for fut in as_completed(futures):
+                sub, sname, lm, err = fut.result()
+                if err is not None:
+                    log(f"  ! live market fetch failed for {sub['id']}: {err}")
+                    continue
+                for market in lm:
+                    # Only take markets that belong to this specific sub-matchup
+                    # (the related/straight response includes sibling-sub props).
+                    if market.get("matchupId") != sub["id"]:
+                        continue
+                    market = inject_designation(market, sub)
+                    market_count += 1
+                    if record_market(market, sub, sname, True,
+                                     snapshot, prev_fps, new_fps, log):
+                        changes += 1
+
+    # Phase C: parallel prop fetch and merge.
+    if prop_work and _running:
+        def fetch_props(parent, sport_name):
+            return parent, sport_name, collect_prop_rows(parent, sport_name, prev_fps)
+
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+            futures = [ex.submit(fetch_props, parent, sname) for parent, sname in prop_work]
+            for fut in as_completed(futures):
+                parent, sname, (rows, fp_updates, log_lines, err_msg) = fut.result()
+                if err_msg:
+                    log(err_msg)
+                for line in log_lines:
+                    log(line)
+                snapshot.extend(rows)
+                new_fps.update(fp_updates)
+                prop_row_count += len(rows)
+                changes += len(log_lines)
 
     if snapshot:
         snap_path = os.path.join(
