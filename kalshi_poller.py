@@ -26,12 +26,14 @@ from datetime import datetime, timezone, timedelta
 import requests
 
 from data_utils import (
+    RateGate,
     RunFlag,
     atomic_write_jsonl,
     install_shutdown_handlers,
     make_logger,
     prune_snapshots,
     sleep_until_next_cycle,
+    write_snapshot_meta,
 )
 import config
 
@@ -47,6 +49,7 @@ RATE_LIMIT_BACKOFF_SEC = config.KALSHI_RATE_LIMIT_BACKOFF_SEC
 DEAD_SERIES_SKIP_AFTER  = config.KALSHI_DEAD_SERIES_SKIP_AFTER
 DEAD_SERIES_RETRY_AFTER = config.KALSHI_DEAD_SERIES_RETRY_AFTER
 SNAPSHOT_RETENTION     = config.POLLER_SNAPSHOT_RETENTION
+KALSHI_INTER_REQUEST_SLEEP = config.KALSHI_INTER_REQUEST_SLEEP
 
 DIR          = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR     = os.path.join(DIR, "data")
@@ -87,22 +90,23 @@ HEADERS = {
 _running = RunFlag()
 log = make_logger(LOG_PATH)
 
-
 _session = requests.Session()
 _session.headers.update(HEADERS)
+
+_gate = RateGate(KALSHI_INTER_REQUEST_SLEEP)
 
 
 def get(path, **params):
     for attempt in range(RATE_LIMIT_RETRIES + 1):
+        _gate.claim_slot()
         r = _session.get(f"{BASE}{path}", params=params, timeout=REQUEST_TIMEOUT)
         if r.status_code == 429 and attempt < RATE_LIMIT_RETRIES:
-            # Honor Retry-After if present, else exponential backoff.
             ra = r.headers.get("Retry-After")
             try:
-                wait = float(ra) if ra else RATE_LIMIT_BACKOFF_SEC * (2 ** attempt)
+                backoff = float(ra) if ra else RATE_LIMIT_BACKOFF_SEC * (2 ** attempt)
             except ValueError:
-                wait = RATE_LIMIT_BACKOFF_SEC * (2 ** attempt)
-            time.sleep(wait)
+                backoff = RATE_LIMIT_BACKOFF_SEC * (2 ** attempt)
+            _gate.record_429(backoff)
             continue
         r.raise_for_status()
         return r.json()
@@ -176,22 +180,26 @@ def format_change(market, old_fp):
     return f"{tag} {t} [{title}] {yes_side}: yes {yb}/{ya} no {nb}/{na}"
 
 
-def _should_poll(ticker, cycle_num, dead_counts, last_poll_cycle):
+def _should_poll(ticker, cycle_num, dead_counts):
     """Decide whether to fetch a series this cycle.
 
     - Warm series (dead_counts < SKIP_AFTER): always poll.
-    - Cold series: poll every DEAD_SERIES_RETRY_AFTER cycles so a newly-
-      publishing series recovers within minutes instead of waiting for the
-      hourly full-series refresh.
+    - Cold series: use a deterministic hash bucket so load spreads evenly across
+      DEAD_SERIES_RETRY_AFTER cycles instead of all cold series polling together.
+      Each cold series still polls exactly once per DEAD_SERIES_RETRY_AFTER cycles
+      (<=5-cycle recovery latency, same as before).
     """
     dc = dead_counts.get(ticker, 0)
     if dc < DEAD_SERIES_SKIP_AFTER:
         return True
-    last = last_poll_cycle.get(ticker, 0)
-    return (cycle_num - last) >= DEAD_SERIES_RETRY_AFTER
+    bucket = int(hashlib.md5(ticker.encode()).hexdigest(), 16) % DEAD_SERIES_RETRY_AFTER
+    return cycle_num % DEAD_SERIES_RETRY_AFTER == bucket
 
 
-def run_cycle(prev_fps, core_series, dead_counts, last_poll_cycle, cycle_num):
+def run_cycle(prev_fps, core_series, dead_counts, cycle_num):
+    _gate.reset_and_get_429()  # discard stale count
+    cycle_start = time.monotonic()
+
     now = datetime.now(timezone.utc)
     horizon = now + timedelta(hours=WINDOW_HOURS)
 
@@ -204,7 +212,7 @@ def run_cycle(prev_fps, core_series, dead_counts, last_poll_cycle, cycle_num):
 
     live_series = [
         s for s in core_series
-        if _should_poll(s["ticker"], cycle_num, dead_counts, last_poll_cycle)
+        if _should_poll(s["ticker"], cycle_num, dead_counts)
     ]
 
     def fetch(s):
@@ -213,6 +221,7 @@ def run_cycle(prev_fps, core_series, dead_counts, last_poll_cycle, cycle_num):
         except requests.RequestException as e:
             return s["ticker"], None, e
 
+    fetch_start = time.monotonic()
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
         futures = [ex.submit(fetch, s) for s in live_series]
         for fut in as_completed(futures):
@@ -251,19 +260,32 @@ def run_cycle(prev_fps, core_series, dead_counts, last_poll_cycle, cycle_num):
                     "liquidity_dollars": m.get("liquidity_dollars"),
                     "status": m.get("status"),
                 })
-            last_poll_cycle[stick] = cycle_num
             if hit:
                 series_with_hits += 1
                 dead_counts[stick] = 0
             else:
                 dead_counts[stick] = dead_counts.get(stick, 0) + 1
 
+    fetch_sec = time.monotonic() - fetch_start
+    rate_limit_429 = _gate.reset_and_get_429()
+    write_sec = 0.0
     if snapshot:
         path = os.path.join(SNAPSHOT_DIR, now.strftime("%Y%m%dT%H%M%SZ") + ".jsonl")
+        write_start = time.monotonic()
         atomic_write_jsonl(
             path, snapshot, dumps_kwargs={"default": str}, logger=log
         )
+        write_sec = time.monotonic() - write_start
+        cycle_elapsed_sec = time.monotonic() - cycle_start
+        write_snapshot_meta(path, {
+            "cycle_elapsed_sec": cycle_elapsed_sec,
+            "fetch_sec": fetch_sec,
+            "write_sec": write_sec,
+            "rate_limit_429": rate_limit_429,
+        }, logger=log)
         prune_snapshots(SNAPSHOT_DIR, SNAPSHOT_RETENTION)
+    else:
+        cycle_elapsed_sec = time.monotonic() - cycle_start
 
     return new_fps, {
         "core_series": len(core_series),
@@ -272,6 +294,10 @@ def run_cycle(prev_fps, core_series, dead_counts, last_poll_cycle, cycle_num):
         "total_markets_seen": total_markets,
         "in_window_markets": in_window_markets,
         "changes": changes,
+        "fetch_sec": fetch_sec,
+        "write_sec": write_sec,
+        "cycle_elapsed_sec": cycle_elapsed_sec,
+        "rate_limit_429": rate_limit_429,
     }
 
 
@@ -294,7 +320,6 @@ def main():
 
     prev_fps = {}
     dead_counts = {}
-    last_poll_cycle = {}
     cycle = 0
     while _running:
         cycle += 1
@@ -304,15 +329,13 @@ def main():
             try:
                 core_series = fetch_core_sports_series()
                 series_loaded_at = t0
-                dead_counts.clear()  # give all series another chance
-                last_poll_cycle.clear()
                 log(f"refreshed sports series list: {len(core_series)} entries")
             except requests.RequestException as e:
                 log(f"series refresh failed (keeping old list): {e}")
 
         try:
             prev_fps, stats = run_cycle(
-                prev_fps, core_series, dead_counts, last_poll_cycle, cycle
+                prev_fps, core_series, dead_counts, cycle
             )
             elapsed = time.time() - t0
             log(
@@ -321,7 +344,10 @@ def main():
                 f"with_hits={stats['series_with_hits']} "
                 f"markets_seen={stats['total_markets_seen']} "
                 f"in_window={stats['in_window_markets']} "
-                f"changes={stats['changes']} elapsed={elapsed:.1f}s"
+                f"changes={stats['changes']} elapsed={elapsed:.1f}s "
+                f"fetch={stats['fetch_sec']:.1f}s "
+                f"write={stats['write_sec']:.2f}s "
+                f"429={stats['rate_limit_429']}"
             )
         except Exception as e:
             log(f"cycle {cycle} FAILED: {type(e).__name__}: {e}")

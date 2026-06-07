@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from flask import Flask, jsonify, render_template_string
 
 from adapters import adapter_for, all_adapters
+from data_utils import read_latest_snapshot_meta
 from find_ev_bet import (
     SNAP_PIN,
     MAX_SNAPSHOT_AGE_SEC,
@@ -89,6 +90,14 @@ def scan_once():
             age_str = f"{age:.0f}s" if age is not None else "MISSING"
             raise RuntimeError(f"stale {book} snapshot {age_str}")
 
+    pin_meta = read_latest_snapshot_meta(SNAP_PIN)
+    pin_poll_sec = (pin_meta or {}).get("cycle_elapsed_sec")
+    book_poll_sec_map = {}
+    for adapter in all_adapters():
+        meta = read_latest_snapshot_meta(adapter.SNAPSHOT_DIR)
+        if meta:
+            book_poll_sec_map[adapter.BOOK] = meta.get("cycle_elapsed_sec")
+
     candidates, stats = find_matches(pin_rows, soft_markets)
 
     rows = []
@@ -127,7 +136,21 @@ def scan_once():
 
             # Paper tracker: simulate a Kelly-sized bet the first time this
             # (book, market_id, side) enters the in_window bucket.
-            side_row = {**c, "side": side, "fair_prob": fair, "selection": selection}
+            book_elapsed = book_poll_sec_map.get(book)
+            total_elapsed = (
+                pin_poll_sec + book_elapsed
+                if pin_poll_sec is not None and book_elapsed is not None
+                else None
+            )
+            side_row = {
+                **c,
+                "side": side,
+                "fair_prob": fair,
+                "selection": selection,
+                "pin_poll_sec": pin_poll_sec,
+                "book_poll_sec": book_elapsed,
+                "total_poll_sec": total_elapsed,
+            }
             try:
                 paper_tracker.maybe_place(side_row, ladder)
             except Exception:
@@ -572,7 +595,7 @@ PAPER_PAGE = """<!doctype html>
     <thead><tr>
       <th>Placed</th><th>Market</th><th>Matchup</th><th>Selection</th>
       <th>Fair %</th><th>Edge %</th><th>Fill</th><th>Shares</th><th>Stake</th>
-      <th>Exp. profit</th><th>Start</th>
+      <th>Exp. profit</th><th>Start</th><th>Poll time</th>
     </tr></thead>
     <tbody id="open"></tbody>
   </table>
@@ -581,7 +604,7 @@ PAPER_PAGE = """<!doctype html>
     <thead><tr>
       <th>Settled</th><th>Market</th><th>Matchup</th><th>Selection</th>
       <th>Fair %</th><th>Close %</th><th>Fair Δ</th><th>CLV</th><th>Edge %</th><th>Fill</th><th>Shares</th><th>Stake</th>
-      <th>Result</th><th>Net P&amp;L</th><th>Bankroll</th>
+      <th>Result</th><th>Net P&amp;L</th><th>Bankroll</th><th>Poll time</th>
     </tr></thead>
     <tbody id="settled"></tbody>
   </table>
@@ -615,6 +638,13 @@ function mtypeCell(r) {
   const period = (r.period_label && r.period_label !== 'FULL') ?
       ' <span class="muted">' + r.period_label + '</span>' : '';
   return '<span class="mtype ' + m + '">' + label + '</span>' + bookBadge(r) + period;
+}
+
+function fmtPoll(r) {
+  if (typeof r.total_poll_sec !== 'number') return '—';
+  const pin = typeof r.pin_poll_sec === 'number' ? r.pin_poll_sec.toFixed(1) + 's pin' : '?s pin';
+  const bk = typeof r.book_poll_sec === 'number' ? r.book_poll_sec.toFixed(1) + 's ' + (r.book || '') : '?s book';
+  return pin + ' + ' + bk + ' = ' + r.total_poll_sec.toFixed(1) + 's';
 }
 
 function render(data) {
@@ -670,11 +700,12 @@ function render(data) {
         '<td class="mono">' + (r.shares || 0).toLocaleString() + '</td>' +
         '<td class="mono">' + money(r.stake) + '</td>' +
         '<td class="mono pos">' + money(r.expected_profit || 0) + '</td>' +
-        '<td class="mono">' + fmtStart(r.pin_start_time) + '</td>';
+        '<td class="mono">' + fmtStart(r.pin_start_time) + '</td>' +
+        '<td class="mono muted">' + fmtPoll(r) + '</td>';
     openBody.appendChild(tr);
   });
   if (!(data.open_positions || []).length) {
-    openBody.innerHTML = '<tr><td colspan="11" class="muted" style="padding:24px;text-align:center;">no open positions</td></tr>';
+    openBody.innerHTML = '<tr><td colspan="12" class="muted" style="padding:24px;text-align:center;">no open positions</td></tr>';
   }
 
   const settledBody = document.getElementById('settled');
@@ -722,11 +753,12 @@ function render(data) {
         '<td class="mono">' + money(r.stake) + '</td>' +
         '<td class="' + resultClass + '">' + (r.result || '—').toUpperCase() + '</td>' +
         '<td class="mono ' + pnlClass + '">' + money(r.net_pnl || 0) + '</td>' +
-        '<td class="mono">' + money(r.bankroll_after || 0) + '</td>';
+        '<td class="mono">' + money(r.bankroll_after || 0) + '</td>' +
+        '<td class="mono muted">' + fmtPoll(r) + '</td>';
     settledBody.appendChild(tr);
   });
   if (!(data.settled || []).length) {
-    settledBody.innerHTML = '<tr><td colspan="15" class="muted" style="padding:24px;text-align:center;">no settled bets yet</td></tr>';
+    settledBody.innerHTML = '<tr><td colspan="16" class="muted" style="padding:24px;text-align:center;">no settled bets yet</td></tr>';
   }
 }
 
@@ -825,7 +857,7 @@ REAL_PAGE = """<!doctype html>
     <thead><tr>
       <th>Placed</th><th>Status</th><th>Market</th><th>Matchup</th><th>Selection</th>
       <th>Fair %</th><th>Edge %</th><th>Fill</th><th>Shares</th><th>Stake</th>
-      <th>Exp. profit</th><th>Start</th>
+      <th>Exp. profit</th><th>Start</th><th>Poll time</th>
     </tr></thead>
     <tbody id="open"></tbody>
   </table>
@@ -835,7 +867,7 @@ REAL_PAGE = """<!doctype html>
       <th>Settled</th><th>Market</th><th>Matchup</th><th>Selection</th>
       <th>Fair %</th><th>Close %</th><th>Fair Δ</th><th>CLV</th>
       <th>Edge %</th><th>Fill</th><th>Shares</th><th>Stake</th>
-      <th>Result</th><th>Net P&amp;L</th>
+      <th>Result</th><th>Net P&amp;L</th><th>Poll time</th>
     </tr></thead>
     <tbody id="settled"></tbody>
   </table>
@@ -867,6 +899,13 @@ function mtypeCell(r) {
   const period = (r.period_label && r.period_label !== 'FULL') ?
       ' <span class="muted">' + r.period_label + '</span>' : '';
   return '<span class="mtype ' + m + '">' + label + '</span>' + bookBadge(r) + period;
+}
+
+function fmtPoll(r) {
+  if (typeof r.total_poll_sec !== 'number') return '—';
+  const pin = typeof r.pin_poll_sec === 'number' ? r.pin_poll_sec.toFixed(1) + 's pin' : '?s pin';
+  const bk = typeof r.book_poll_sec === 'number' ? r.book_poll_sec.toFixed(1) + 's ' + (r.book || '') : '?s book';
+  return pin + ' + ' + bk + ' = ' + r.total_poll_sec.toFixed(1) + 's';
 }
 
 function render(data) {
@@ -940,11 +979,12 @@ function render(data) {
         '<td class="mono">' + (r.shares || 0).toLocaleString() + '</td>' +
         '<td class="mono">' + money(r.stake) + '</td>' +
         '<td class="mono pos">' + money(r.expected_profit || 0) + '</td>' +
-        '<td class="mono">' + fmtStart(r.pin_start_time) + '</td>';
+        '<td class="mono">' + fmtStart(r.pin_start_time) + '</td>' +
+        '<td class="mono muted">' + fmtPoll(r) + '</td>';
     openBody.appendChild(tr);
   });
   if (!(data.open_positions || []).length) {
-    openBody.innerHTML = '<tr><td colspan="12" class="muted" style="padding:24px;text-align:center;">no open positions</td></tr>';
+    openBody.innerHTML = '<tr><td colspan="13" class="muted" style="padding:24px;text-align:center;">no open positions</td></tr>';
   }
 
   const settledBody = document.getElementById('settled');
@@ -985,7 +1025,8 @@ function render(data) {
         '<td class="mono">' + (r.shares || 0).toLocaleString() + '</td>' +
         '<td class="mono">' + money(r.stake) + '</td>' +
         '<td class="' + resultClass + '">' + (won ? 'WIN' : 'LOSS') + '</td>' +
-        '<td class="mono ' + pnlClass + '">' + money(r.net_pnl || 0) + '</td>';
+        '<td class="mono ' + pnlClass + '">' + money(r.net_pnl || 0) + '</td>' +
+        '<td class="mono muted">' + fmtPoll(r) + '</td>';
     settledBody.appendChild(tr);
   });
   if (!(data.settled || []).length) {

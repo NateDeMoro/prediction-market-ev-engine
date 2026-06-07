@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 
 import requests
 
-from data_utils import atomic_write_jsonl, make_logger, prune_snapshots
+from data_utils import atomic_write_jsonl, make_logger, prune_snapshots, write_snapshot_meta
 import config
 
 GATEWAY = "https://gateway.polymarket.us"
@@ -146,14 +146,23 @@ def snapshot_once():
     os.makedirs(SNAPSHOT_DIR, exist_ok=True)
     fname = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + ".jsonl"
     path = os.path.join(SNAPSHOT_DIR, fname)
+    fetch_sec = time.time() - start
+    write_start = time.time()
     atomic_write_jsonl(
         path, rows, dumps_kwargs={"separators": (",", ":")}, logger=_log
     )
-
-    prune_snapshots(SNAPSHOT_DIR, SNAPSHOT_RETENTION)
+    write_sec = time.time() - write_start
     dt = time.time() - start
+    write_snapshot_meta(path, {
+        "cycle_elapsed_sec": dt,
+        "fetch_sec": fetch_sec,
+        "write_sec": write_sec,
+        "rate_limit_429": 0,
+    }, logger=_log)
+    prune_snapshots(SNAPSHOT_DIR, SNAPSHOT_RETENTION)
     _log(f"cycle rows={len(rows)} leagues={len(LEAGUES)} errors={errors} "
-         f"file={os.path.basename(path)} elapsed={dt:.1f}s")
+         f"file={os.path.basename(path)} elapsed={dt:.1f}s "
+         f"fetch={fetch_sec:.1f}s write={write_sec:.2f}s")
 
 
 def _install_signal_handlers():

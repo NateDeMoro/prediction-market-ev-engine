@@ -301,16 +301,17 @@ POLLER_REQUEST_TIMEOUT   = 15
 # Kalshi poller specifics.
 KALSHI_WINDOW_HOURS          = 24
 KALSHI_SERIES_REFRESH_SEC    = 3600   # re-list sports series hourly
-KALSHI_MAX_WORKERS           = 3      # unauth rate limit ~2 req/s; keep pool small
+KALSHI_MAX_WORKERS           = 3      # gate bounds the rate; workers only tune I/O overlap
 KALSHI_RATE_LIMIT_RETRIES    = 4
 KALSHI_RATE_LIMIT_BACKOFF_SEC = 2.0
+KALSHI_INTER_REQUEST_SLEEP   = 0.2   # global min-interval (~5 req/s baseline); tune against sidecar rate_limit_429
 KALSHI_DEAD_SERIES_SKIP_AFTER  = 3
 KALSHI_DEAD_SERIES_RETRY_AFTER = 5
 
 # Pinnacle poller specifics.
 PINNACLE_WINDOW_HOURS          = 24
 PINNACLE_LIVE_LOOKBACK_HOURS   = 6
-PINNACLE_INTER_REQUEST_SLEEP   = 0.1   # global min-interval (~10 req/s baseline); backoff on 429
+PINNACLE_INTER_REQUEST_SLEEP   = 0.2   # global min-interval (~10 req/s baseline); backoff on 429
 PINNACLE_MAX_WORKERS           = 4      # gate bounds the rate regardless; this only tunes I/O overlap
 PINNACLE_RATE_LIMIT_RETRIES    = 4
 PINNACLE_RATE_LIMIT_BACKOFF_SEC = 2.0

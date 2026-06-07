@@ -22,18 +22,20 @@ import os
 import re
 import time
 import hashlib
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 import requests
 
 from data_utils import (
+    RateGate,
     RunFlag,
     atomic_write_jsonl,
     install_shutdown_handlers,
     make_logger,
     prune_snapshots,
+    read_latest_snapshot_meta,
     sleep_until_next_cycle,
+    write_snapshot_meta,
 )
 from devig_utils import american_to_decimal
 import config
@@ -84,22 +86,12 @@ HEADERS = {
 _running = RunFlag()
 log = make_logger(LOG_PATH)
 
-# Global rate gate: request starts are spaced INTER_REQUEST_SLEEP apart across all threads.
-# Initialized at import and intentionally persisted across cycles — never reset.
-_rate_lock = threading.Lock()
-_next_slot = time.monotonic()
+_gate = RateGate(INTER_REQUEST_SLEEP)
 
 
 def get(path, **params):
-    global _next_slot
     for attempt in range(RATE_LIMIT_RETRIES + 1):
-        with _rate_lock:
-            now = time.monotonic()
-            wake_at = max(now, _next_slot)
-            _next_slot = wake_at + INTER_REQUEST_SLEEP
-        gap = wake_at - time.monotonic()
-        if gap > 0:
-            time.sleep(gap)
+        _gate.claim_slot()
         r = requests.get(f"{BASE}{path}", headers=HEADERS, params=params, timeout=REQUEST_TIMEOUT)
         if r.status_code == 429 and attempt < RATE_LIMIT_RETRIES:
             ra = r.headers.get("Retry-After")
@@ -107,8 +99,7 @@ def get(path, **params):
                 backoff = float(ra) if ra else RATE_LIMIT_BACKOFF_SEC * (2 ** attempt)
             except ValueError:
                 backoff = RATE_LIMIT_BACKOFF_SEC * (2 ** attempt)
-            with _rate_lock:
-                _next_slot = max(_next_slot, time.monotonic() + backoff)
+            _gate.record_429(backoff)
             continue
         r.raise_for_status()
         return r.json()
@@ -387,6 +378,9 @@ def collect_prop_rows(parent_matchup, sport_name, prev_fps):
 
 def run_cycle(prev_fps):
     """Execute one poll cycle. Returns (new_fps dict, stats)."""
+    _gate.reset_and_get_429()  # discard any stale count from a previous cycle
+    cycle_start = time.monotonic()
+
     now = datetime.now(timezone.utc)
     earliest = now - timedelta(hours=LIVE_LOOKBACK_HOURS)
     latest = now + timedelta(hours=WINDOW_HOURS)
@@ -404,6 +398,7 @@ def run_cycle(prev_fps):
     # accumulate work lists for the parallel phases below.
     live_work = []   # (sub, sport_name)
     prop_work = []   # (parent, sport_name)
+    phase_a_start = time.monotonic()
 
     for sport in sports:
         sid = sport["id"]
@@ -449,7 +444,10 @@ def run_cycle(prev_fps):
                     continue
                 prop_work.append((parent, sname))
 
+    phase_a_sec = time.monotonic() - phase_a_start
+
     # Phase B: parallel live market fetch and merge.
+    phase_b_start = time.monotonic()
     if live_work and _running:
         def fetch_live(sub, sport_name):
             try:
@@ -475,7 +473,10 @@ def run_cycle(prev_fps):
                                      snapshot, prev_fps, new_fps, log):
                         changes += 1
 
+    phase_b_sec = time.monotonic() - phase_b_start
+
     # Phase C: parallel prop fetch and merge.
+    phase_c_start = time.monotonic()
     if prop_work and _running:
         def fetch_props(parent, sport_name):
             return parent, sport_name, collect_prop_rows(parent, sport_name, prev_fps)
@@ -493,14 +494,31 @@ def run_cycle(prev_fps):
                 prop_row_count += len(rows)
                 changes += len(log_lines)
 
+    phase_c_sec = time.monotonic() - phase_c_start
+
+    rate_limit_429 = _gate.reset_and_get_429()
+    write_sec = 0.0
     if snapshot:
         snap_path = os.path.join(
             SNAPSHOT_DIR, now.strftime("%Y%m%dT%H%M%SZ") + ".jsonl"
         )
+        write_start = time.monotonic()
         atomic_write_jsonl(
             snap_path, snapshot, dumps_kwargs={"default": str}, logger=log
         )
+        write_sec = time.monotonic() - write_start
+        cycle_elapsed_sec = time.monotonic() - cycle_start
+        write_snapshot_meta(snap_path, {
+            "cycle_elapsed_sec": cycle_elapsed_sec,
+            "phase_a_sec": phase_a_sec,
+            "phase_b_sec": phase_b_sec,
+            "phase_c_sec": phase_c_sec,
+            "write_sec": write_sec,
+            "rate_limit_429": rate_limit_429,
+        }, logger=log)
         prune_snapshots(SNAPSHOT_DIR, SNAPSHOT_RETENTION)
+    else:
+        cycle_elapsed_sec = time.monotonic() - cycle_start
 
     return new_fps, {
         "sports": len(sports),
@@ -509,6 +527,12 @@ def run_cycle(prev_fps):
         "markets": market_count,
         "prop_rows": prop_row_count,
         "changes": changes,
+        "phase_a_sec": phase_a_sec,
+        "phase_b_sec": phase_b_sec,
+        "phase_c_sec": phase_c_sec,
+        "write_sec": write_sec,
+        "cycle_elapsed_sec": cycle_elapsed_sec,
+        "rate_limit_429": rate_limit_429,
     }
 
 
@@ -532,7 +556,12 @@ def main():
                 f"cycle {cycle} ok: sports={stats['sports']} "
                 f"pregame={stats['pregame']} live={stats['live']} "
                 f"markets={stats['markets']} prop_rows={stats['prop_rows']} "
-                f"changes={stats['changes']} elapsed={elapsed:.1f}s"
+                f"changes={stats['changes']} elapsed={elapsed:.1f}s "
+                f"phaseA={stats['phase_a_sec']:.1f}s "
+                f"phaseB={stats['phase_b_sec']:.1f}s "
+                f"phaseC={stats['phase_c_sec']:.1f}s "
+                f"write={stats['write_sec']:.2f}s "
+                f"429={stats['rate_limit_429']}"
             )
         except Exception as e:
             log(f"cycle {cycle} FAILED: {type(e).__name__}: {e}")

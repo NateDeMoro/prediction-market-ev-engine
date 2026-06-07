@@ -394,6 +394,9 @@ def maybe_place(row, ladder, now=None):
         "kelly_fraction_full": sized["kelly_fraction_full"],
         "kelly_fraction_applied": sized["kelly_fraction_applied"],
         "levels": sized["levels"],
+        "pin_poll_sec": row.get("pin_poll_sec"),
+        "book_poll_sec": row.get("book_poll_sec"),
+        "total_poll_sec": row.get("total_poll_sec"),
     }
 
     with _lock:
