@@ -23,22 +23,14 @@ from datetime import datetime, timezone, timedelta
 from adapters import all_adapters, adapter_for
 from devig_utils import american_to_decimal, devig_multiplicative
 from market_matcher import match_all_markets, parse_iso
+import config
 
-DIR = os.path.dirname(os.path.abspath(__file__))
-SNAP_PIN = os.path.join(DIR, "data", "snapshots")
-
-MAX_SNAPSHOT_AGE_SEC = 300
-
-# Only surface games whose Pinnacle startTime is this far out. Late-pregame is
-# where news-driven line moves (lineups, scratches, weather) create tradeable
-# lag on soft books without competing against sub-second live-market arb bots.
-MIN_HOURS_TO_START = 0.5
-MAX_HOURS_TO_START = 3.0
-
-# Minimum edge gate for player props. Pinnacle's max-stake on props is $250
-# vs $7.5k+ on team markets, so prop quotes are noisier and we need a larger
-# edge before surfacing. Overridable at runtime.
-PROP_MIN_EDGE_PCT = float(os.getenv("PROP_MIN_EDGE", "4.0"))
+# Re-export from config so ev_dashboard can still import these from here.
+SNAP_PIN           = config.PIN_SNAPSHOT_DIR
+MAX_SNAPSHOT_AGE_SEC = config.MAX_SNAPSHOT_AGE_SEC
+MIN_HOURS_TO_START = config.MIN_HOURS_TO_START
+MAX_HOURS_TO_START = config.MAX_HOURS_TO_START
+PROP_MIN_EDGE_PCT  = config.PROP_MIN_EDGE_PCT
 
 
 # ---------------------------------------------------------------------------

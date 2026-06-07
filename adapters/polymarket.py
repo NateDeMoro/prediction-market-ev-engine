@@ -29,23 +29,21 @@ import re
 import requests
 
 from .common import NormalizedMarket
+import config
 
 BOOK = "polymarket"
 SUPPORTS_NO_SIDE = True
 
 DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SNAPSHOT_DIR = os.path.join(DIR, "data", "polymarket_snapshots")
+SNAPSHOT_DIR = config.POLYMARKET_SNAPSHOT_DIR
 
 GATEWAY = "https://gateway.polymarket.us"
 HEADERS = {"User-Agent": "Mozilla/5.0 (ev-scanner)", "Accept": "application/json"}
-REQUEST_TIMEOUT = 10
+REQUEST_TIMEOUT = config.ADAPTER_READ_TIMEOUT
 
-# Polymarket taker fee per the published schedule:
-#   fees = C * feeRate * P * (1-P)
-# Charged upfront at fill, independent of outcome. Sports rate = 0.03 (peaks at
-# $0.0075/share at P=0.5); crypto rate = 0.072 and is out-of-scope. Makers pay
-# zero and receive no rebate on sports.
-FEE_RATE = 0.03
+# Polymarket taker fee per the published schedule.
+# Update config.PER_BOOK_FEE_RATE["polymarket"] when the schedule changes.
+FEE_RATE = config.PER_BOOK_FEE_RATE["polymarket"]
 
 _TYPE_MAP = {
     "SPORTS_MARKET_TYPE_MONEYLINE": "moneyline",

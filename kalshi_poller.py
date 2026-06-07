@@ -33,30 +33,25 @@ from data_utils import (
     prune_snapshots,
     sleep_until_next_cycle,
 )
+import config
 
 BASE = "https://api.elections.kalshi.com/trade-api/v2"
 
-POLL_INTERVAL_SEC = 60
-WINDOW_HOURS = 24           # match Pinnacle's window (pregame + live lookback)
-SERIES_REFRESH_SEC = 3600   # re-list sports series hourly
-REQUEST_TIMEOUT = 15
-MAX_WORKERS = 3             # Kalshi unauth limit is ~2 req/sec; keep pool small
-RATE_LIMIT_RETRIES = 4
-RATE_LIMIT_BACKOFF_SEC = 2.0
-# Series with no in-window markets for this many consecutive cycles become
-# cold. Cold series are only re-polled every DEAD_SERIES_RETRY_AFTER cycles
-# to avoid wasting request budget, but are never fully frozen until the 1h
-# series refresh — so a series that starts publishing mid-hour recovers
-# within ~DEAD_SERIES_RETRY_AFTER*interval seconds instead of waiting up to
-# an hour for the next refresh.
-DEAD_SERIES_SKIP_AFTER = 3
-DEAD_SERIES_RETRY_AFTER = 5
-SNAPSHOT_RETENTION = 60  # keep the N most recent snapshots (≈ last hour)
+POLL_INTERVAL_SEC      = config.POLLER_INTERVAL_SEC
+WINDOW_HOURS           = config.KALSHI_WINDOW_HOURS
+SERIES_REFRESH_SEC     = config.KALSHI_SERIES_REFRESH_SEC
+REQUEST_TIMEOUT        = config.POLLER_REQUEST_TIMEOUT
+MAX_WORKERS            = config.KALSHI_MAX_WORKERS
+RATE_LIMIT_RETRIES     = config.KALSHI_RATE_LIMIT_RETRIES
+RATE_LIMIT_BACKOFF_SEC = config.KALSHI_RATE_LIMIT_BACKOFF_SEC
+DEAD_SERIES_SKIP_AFTER  = config.KALSHI_DEAD_SERIES_SKIP_AFTER
+DEAD_SERIES_RETRY_AFTER = config.KALSHI_DEAD_SERIES_RETRY_AFTER
+SNAPSHOT_RETENTION     = config.POLLER_SNAPSHOT_RETENTION
 
-DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(DIR, "data")
-SNAPSHOT_DIR = os.path.join(DATA_DIR, "kalshi_snapshots")
-LOG_PATH = os.path.join(DATA_DIR, "kalshi.log")
+DIR          = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR     = os.path.join(DIR, "data")
+SNAPSHOT_DIR = config.KALSHI_SNAPSHOT_DIR
+LOG_PATH     = os.path.join(DATA_DIR, "kalshi.log")
 
 # Core head-to-head / spread / total / moneyline series.
 # Anything ending in GAME, SPREAD, TOTAL, or ML is a primary line market
@@ -79,7 +74,7 @@ PER_GAME_PROP_SERIES = {
 }
 
 # Opt-in via env-var so the existing team-market pipeline runs untouched until rollout.
-INCLUDE_PROPS = os.getenv("KALSHI_INCLUDE_PROPS") == "1"
+INCLUDE_PROPS = config.KALSHI_INCLUDE_PROPS
 
 HEADERS = {
     "User-Agent": (

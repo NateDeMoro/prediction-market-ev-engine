@@ -21,23 +21,21 @@ from .common import (
     resolve_team_abbrev,
     series_ticker_league,
 )
+import config
 
 BOOK = "kalshi"
 SUPPORTS_NO_SIDE = True
 
 DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SNAPSHOT_DIR = os.path.join(DIR, "data", "kalshi_snapshots")
+SNAPSHOT_DIR = config.KALSHI_SNAPSHOT_DIR
 
 BASE = "https://api.elections.kalshi.com/trade-api/v2"
 HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-REQUEST_TIMEOUT = 10
+REQUEST_TIMEOUT = config.ADAPTER_READ_TIMEOUT
 
-# Kalshi taker fee per the official fee schedule (effective 2026-02-05):
-#   fees = round_up(0.07 * C * P * (1-P))
-# Charged upfront at fill execution, independent of outcome. Peaks at
-# $0.0175/share when P=0.5 and falls to zero at both extremes.
-# Source: Kalshi Fee Structure PDF, 2026-02-05.
-FEE_RATE = 0.07
+# Kalshi taker fee per the official fee schedule (effective 2026-02-05).
+# Update config.PER_BOOK_FEE_RATE["kalshi"] when the schedule changes.
+FEE_RATE = config.PER_BOOK_FEE_RATE["kalshi"]
 
 # Series ticker classifiers.
 MONEYLINE_SUFFIX = re.compile(r"(GAME|ML|H2H)$")

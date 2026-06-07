@@ -27,26 +27,26 @@ from datetime import datetime, timezone
 import requests
 
 from data_utils import atomic_write_jsonl, make_logger, prune_snapshots
+import config
 
 GATEWAY = "https://gateway.polymarket.us"
 LEAGUES = ("nba", "nhl", "mlb", "nfl", "wnba", "ncaaf", "ncaab")
 
-POLL_INTERVAL_SEC = 60
-REQUEST_TIMEOUT = 15
-MAX_WORKERS = 4
-# Gateway rate limit is 20 req/s per IP; one request per league stays well below.
-SNAPSHOT_RETENTION = 60  # keep the N most recent snapshots
+POLL_INTERVAL_SEC  = config.POLLER_INTERVAL_SEC
+REQUEST_TIMEOUT    = config.POLLER_REQUEST_TIMEOUT
+MAX_WORKERS        = config.POLYMARKET_MAX_WORKERS
+SNAPSHOT_RETENTION = config.POLLER_SNAPSHOT_RETENTION
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (ev-scanner)",
     "Accept": "application/json",
 }
 
-DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(DIR, "data")
-SNAPSHOT_DIR = os.path.join(DATA_DIR, "polymarket_snapshots")
-LOG_PATH = os.path.join(DATA_DIR, "polymarket.log")
-PID_PATH = os.path.join(DATA_DIR, "polymarket.pid")
+DIR          = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR     = os.path.join(DIR, "data")
+SNAPSHOT_DIR = config.POLYMARKET_SNAPSHOT_DIR
+LOG_PATH     = os.path.join(DATA_DIR, "polymarket.log")
+PID_PATH     = os.path.join(DATA_DIR, "polymarket.pid")
 
 
 _log = make_logger(LOG_PATH)

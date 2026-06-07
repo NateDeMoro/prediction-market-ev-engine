@@ -34,6 +34,7 @@ from data_utils import (
     sleep_until_next_cycle,
 )
 from devig_utils import american_to_decimal
+import config
 
 BASE = "https://guest.api.arcadia.pinnacle.com/0.1"
 API_KEY = os.environ.get("PINNACLE_API_KEY")
@@ -44,18 +45,18 @@ if not API_KEY:
         "systemd EnvironmentFile (.env) before starting the poller."
     )
 
-POLL_INTERVAL_SEC = 60
-WINDOW_HOURS = 24            # include games up to 24h out
-LIVE_LOOKBACK_HOURS = 6      # include live games that started up to 6h ago
-REQUEST_TIMEOUT = 15
-INTER_REQUEST_SLEEP = 0.2  # 5 req/sec ceiling, well under any rate limit
-SNAPSHOT_RETENTION = 60      # keep the N most recent snapshots (≈ last hour)
+POLL_INTERVAL_SEC    = config.POLLER_INTERVAL_SEC
+WINDOW_HOURS         = config.PINNACLE_WINDOW_HOURS
+LIVE_LOOKBACK_HOURS  = config.PINNACLE_LIVE_LOOKBACK_HOURS
+REQUEST_TIMEOUT      = config.POLLER_REQUEST_TIMEOUT
+INTER_REQUEST_SLEEP  = config.PINNACLE_INTER_REQUEST_SLEEP
+SNAPSHOT_RETENTION   = config.POLLER_SNAPSHOT_RETENTION
 
 # Player-prop ingestion: 2 extra calls per parent matchup. PROP_SPORTS is a
 # cheap first-pass on Pinnacle's broad sport name; PROP_LEAGUES is the precise
 # filter applied after we've fetched /related (which carries league.name on the
 # parent). See data/pinnacle_probe/NOTES.md.
-INCLUDE_PROPS = os.getenv("PINNACLE_INCLUDE_PROPS") == "1"
+INCLUDE_PROPS = config.PINNACLE_INCLUDE_PROPS
 PROP_SPORTS = {"Basketball", "Hockey"}
 PROP_LEAGUES = {"NBA", "NHL"}
 

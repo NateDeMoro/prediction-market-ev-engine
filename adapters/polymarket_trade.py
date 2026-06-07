@@ -31,10 +31,11 @@ import uuid
 
 import requests
 from cryptography.hazmat.primitives.asymmetric import ed25519
+import config
 
 BOOK = "polymarket"
 BASE = "https://api.polymarket.us"
-REQUEST_TIMEOUT = 15
+REQUEST_TIMEOUT = config.ADAPTER_TRADE_TIMEOUT
 
 _key_lock = threading.Lock()
 _private_key = None

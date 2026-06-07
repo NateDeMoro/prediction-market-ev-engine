@@ -38,64 +38,9 @@ from datetime import datetime, timezone
 from adapters import adapter_for
 from adapters.common import fuzzy_match
 from devig_utils import devig_multiplicative, synthesize_combined_american
-
-INITIAL_BANKROLL = 5000.0
-KELLY_FRACTION = 0.25
-# Per-Pinnacle-matchup stake cap as a fraction of bankroll. Bounds aggregate
-# exposure on correlated bets within one match (team total Over + spread +
-# multiple player props all resolve on the same game state). Once the cap is
-# hit, further Kelly stakes on that matchup are clamped or skipped.
-PER_MATCH_STAKE_CAP_PCT = 0.03
-PER_MATCH_BET_CAP = 2          # Max open paper bets sharing a Pinnacle matchup
-MIN_EDGE_PCT = 2.0             # per-book floor for edge_pct placement gate
-# Per-book price-aware threshold: min_edge_pct(px) = max(MIN_EDGE_PCT,
-# 100 * fee_rate * (1-px) + margin_pp). The BE term cancels the upfront
-# taker-fee drag (largest at low px); the margin covers calibration bias
-# and sizing noise. Kalshi margin chosen from threshold_sweep_kalshi.py
-# (BE+1.0pp gained +0.36% mean vs flat 2% with std 0.14% across 8 seeds).
-# Polymarket uses the same +1.0pp margin — sports fee is 0.03 × P × (1-P),
-# so the BE term is ~3/7 of Kalshi's; a book-specific sweep has not yet
-# validated whether a different margin is optimal. Books not listed here
-# fall through to the flat MIN_EDGE_PCT floor.
-PER_BOOK_FEE_RATE = {
-    "kalshi": 0.07,
-    "polymarket": 0.03,
-}
-PER_BOOK_EDGE_MARGIN_PP = {
-    "kalshi": 1.0,
-    "polymarket": 1.0,
-}
-# Sanity ceilings on edge. Realistic +EV on liquid soft books is < 15% for
-# team markets and < 25% for props — anything higher is almost certainly a
-# matcher mistake (wrong Pinnacle game, cross-sport cross-match, etc.).
-# These guard paper-tracker placement so ambient matcher bugs can't pollute
-# CLV; rejected rows are logged to data/sanity_rejected.jsonl for triage.
-SANITY_MAX_EDGE_PCT = float(os.getenv("SANITY_MAX_EDGE", "15.0"))
-SANITY_MAX_EDGE_PCT_PROP = float(os.getenv("SANITY_MAX_EDGE_PROP", "25.0"))
-# Player-prop edge gate is higher than team markets (Pinnacle's prop max-stake
-# is ~$250 vs $7.5k+ for team totals/MLs; quotes are noisier). Also gated by
-# INCLUDE_PROPS below so props stay out of paper trading until explicitly
-# enabled — first week of prop data should land on the dashboard only so CLV
-# for team markets isn't contaminated.
-PROP_MIN_EDGE_PCT = float(os.getenv("PROP_MIN_EDGE", "4.0"))
-INCLUDE_PROPS = os.getenv("PAPER_INCLUDE_PROPS") == "1"
-SETTLEMENT_POLL_SEC = 30 * 60
-# Closing-line-value capture cadence. Runs frequently so we hit the ~60-s
-# window around startTime before the Pinnacle snapshot that contains the
-# closing line rolls out of the pollers' 60-file retention.
-CLOSE_CAPTURE_POLL_SEC = 30
-CLOSE_CAPTURE_LEAD_SEC = 60        # start attempting capture this long before startTime
-CLOSE_CAPTURE_TRAIL_SEC = 15 * 60  # stop attempting capture this long after startTime
+import config
 
 PIN_PERIOD_LABEL_TO_INT = {"FULL": 0, "1H": 1, "2H": 2}
-
-DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(DIR, "data")
-TRADES_PATH = os.path.join(DATA_DIR, "paper_trades.jsonl")
-SETTLEMENTS_PATH = os.path.join(DATA_DIR, "paper_settlements.jsonl")
-CLOSES_PATH = os.path.join(DATA_DIR, "paper_closes.jsonl")
-SANITY_REJECTED_PATH = os.path.join(DATA_DIR, "sanity_rejected.jsonl")
-PIN_SNAPSHOT_DIR = os.path.join(DATA_DIR, "snapshots")
 
 _lock = threading.Lock()
 _placed_keys = set()       # f"{book}:{market_id}:{side}"
@@ -103,7 +48,7 @@ _open_positions = {}       # key -> placement record
 _settled_records = []
 _placements = []
 _closes_by_key = {}        # key -> close record
-_bankroll = INITIAL_BANKROLL
+_bankroll = config.PAPER_INITIAL_BANKROLL
 
 
 def _key(book, market_id, side="yes"):
@@ -127,23 +72,6 @@ def _count_on_matchup(pin_matchup_id):
         return 0
     return sum(1 for r in _open_positions.values()
                if r.get("pin_matchup_id") == pin_matchup_id)
-
-
-def _min_edge_pct(book, avg_fill_price, is_prop):
-    """Minimum edge_pct required to place a bet on this book at this fill price.
-
-    Falls back to the flat team/prop floor when the book has no calibrated
-    per-price schedule. For books that do (currently Kalshi), the threshold is
-    max(floor, 100 * fee_rate * (1-px) + margin_pp) — cancels the real upfront
-    taker-fee drag and adds a small safety margin for calibration bias.
-    """
-    floor = PROP_MIN_EDGE_PCT if is_prop else MIN_EDGE_PCT
-    rate = PER_BOOK_FEE_RATE.get(book)
-    margin = PER_BOOK_EDGE_MARGIN_PP.get(book)
-    if rate is None or margin is None or avg_fill_price is None:
-        return floor
-    be_plus_margin = 100.0 * rate * (1.0 - avg_fill_price) + margin
-    return max(floor, be_plus_margin)
 
 
 def _record_key(record):
@@ -201,9 +129,9 @@ def _expected_profit_at(record, fair_prob):
 
 def _replay_state():
     global _bankroll
-    trades = _read_jsonl(TRADES_PATH)
-    settlements = _read_jsonl(SETTLEMENTS_PATH)
-    closes = _read_jsonl(CLOSES_PATH)
+    trades = _read_jsonl(config.PAPER_TRADES_PATH)
+    settlements = _read_jsonl(config.PAPER_SETTLEMENTS_PATH)
+    closes = _read_jsonl(config.PAPER_CLOSES_PATH)
 
     _placements.clear()
     _placed_keys.clear()
@@ -234,7 +162,7 @@ def _replay_state():
         "selection", "yes_side_label",
     )
 
-    _bankroll = INITIAL_BANKROLL
+    _bankroll = config.PAPER_INITIAL_BANKROLL
     for s in settlements:
         key = _record_key(s)
         if key and key in placements_by_key:
@@ -329,7 +257,7 @@ def size_bet(ladder, fair_prob, bankroll, adapter, max_stake=None):
     if f_full <= 0:
         return None
 
-    kelly_stake_budget = bankroll * f_full * KELLY_FRACTION
+    kelly_stake_budget = bankroll * f_full * config.KELLY_FRACTION
     if max_stake is not None:
         kelly_stake_budget = min(kelly_stake_budget, max_stake)
     if kelly_stake_budget <= 0:
@@ -363,7 +291,7 @@ def size_bet(ladder, fair_prob, bankroll, adapter, max_stake=None):
         "fee_upfront": round(fee_upfront, 4),
         "avg_fill_price": round(avg_fill, 6),
         "kelly_fraction_full": round(f_full, 6),
-        "kelly_fraction_applied": KELLY_FRACTION,
+        "kelly_fraction_applied": config.KELLY_FRACTION,
         "expected_profit": round(expected_profit, 4),
         "levels": detail,
     }
@@ -381,7 +309,7 @@ def maybe_place(row, ladder, now=None):
     if not market_id:
         return None
     is_prop = row.get("market_type") == "player_prop"
-    if is_prop and not INCLUDE_PROPS:
+    if is_prop and not config.PAPER_INCLUDE_PROPS:
         return None
     side = row.get("side") or "yes"
     key = _key(book, market_id, side)
@@ -394,10 +322,10 @@ def maybe_place(row, ladder, now=None):
         already_on_match = _stake_on_matchup(pin_matchup_id)
         open_bets_on_match = _count_on_matchup(pin_matchup_id)
 
-    if pin_matchup_id is not None and open_bets_on_match >= PER_MATCH_BET_CAP:
+    if pin_matchup_id is not None and open_bets_on_match >= config.PER_MATCH_BET_CAP:
         return None
 
-    per_match_cap = bankroll_now * PER_MATCH_STAKE_CAP_PCT
+    per_match_cap = bankroll_now * config.PER_MATCH_STAKE_CAP_PCT
     available_match_stake = max(0.0, per_match_cap - already_on_match)
     if available_match_stake <= 0:
         return None
@@ -410,13 +338,13 @@ def maybe_place(row, ladder, now=None):
 
     edge_pct = (sized["expected_profit"] / sized["stake"] * 100.0
                 if sized["stake"] > 0 else 0.0)
-    min_edge = _min_edge_pct(book, sized["avg_fill_price"], is_prop)
+    min_edge = config.min_edge_pct(book, row.get("market_type"), sized["avg_fill_price"])
     if edge_pct < min_edge:
         return None
 
-    max_edge = SANITY_MAX_EDGE_PCT_PROP if is_prop else SANITY_MAX_EDGE_PCT
+    max_edge = config.SANITY_MAX_EDGE_PCT_PROP if is_prop else config.SANITY_MAX_EDGE_PCT
     if edge_pct > max_edge:
-        _append_jsonl(SANITY_REJECTED_PATH, {
+        _append_jsonl(config.PAPER_SANITY_REJECTED_PATH, {
             "rejected_at": (now or datetime.now(timezone.utc)).isoformat(),
             "book": book,
             "market_id": market_id,
@@ -471,7 +399,7 @@ def maybe_place(row, ladder, now=None):
     with _lock:
         if key in _placed_keys:
             return None
-        _append_jsonl(TRADES_PATH, record)
+        _append_jsonl(config.PAPER_TRADES_PATH, record)
         _placed_keys.add(key)
         _open_positions[key] = record
         _placements.append(record)
@@ -495,8 +423,8 @@ def _parse_iso(s):
 def _load_latest_pin_snapshot():
     try:
         files = sorted(
-            os.path.join(PIN_SNAPSHOT_DIR, f)
-            for f in os.listdir(PIN_SNAPSHOT_DIR) if f.endswith(".jsonl")
+            os.path.join(config.PIN_SNAPSHOT_DIR, f)
+            for f in os.listdir(config.PIN_SNAPSHOT_DIR) if f.endswith(".jsonl")
         )
     except OSError:
         return None
@@ -686,7 +614,7 @@ def _capture_close_for(record, pin_rows, now):
             # cuts noise without affecting the captured value.
             if existing.get("fair_prob_close") == close["fair_prob_close"]:
                 return None
-        _append_jsonl(CLOSES_PATH, close)
+        _append_jsonl(config.PAPER_CLOSES_PATH, close)
         _closes_by_key[key] = close
     return close
 
@@ -714,10 +642,10 @@ def capture_closes_once():
         if start is None:
             continue
         dt = (start - now).total_seconds()
-        if dt < -CLOSE_CAPTURE_TRAIL_SEC:
+        if dt < -config.CLOSE_CAPTURE_TRAIL_SEC:
             continue
         is_prop = r.get("market_type") == "player_prop"
-        if not is_prop and dt > CLOSE_CAPTURE_LEAD_SEC:
+        if not is_prop and dt > config.CLOSE_CAPTURE_LEAD_SEC:
             continue
         relevant.append(r)
     if not relevant:
@@ -739,7 +667,7 @@ def _close_capture_loop():
             capture_closes_once()
         except Exception:
             traceback.print_exc()
-        time.sleep(CLOSE_CAPTURE_POLL_SEC)
+        time.sleep(config.CLOSE_CAPTURE_POLL_SEC)
 
 
 def start_close_capture_thread():
@@ -827,7 +755,7 @@ def _settle_one(record):
                 recomputed = _expected_profit_at(settlement, fpc)
                 if recomputed is not None:
                     settlement["expected_profit"] = recomputed
-        _append_jsonl(SETTLEMENTS_PATH, settlement)
+        _append_jsonl(config.PAPER_SETTLEMENTS_PATH, settlement)
         _settled_records.append(settlement)
 
     return settlement
@@ -850,7 +778,7 @@ def _settlement_loop():
             poll_settlements_once()
         except Exception:
             traceback.print_exc()
-        time.sleep(SETTLEMENT_POLL_SEC)
+        time.sleep(config.SETTLEMENT_POLL_SEC)
 
 
 def start_settlement_thread():
@@ -870,7 +798,7 @@ def snapshot():
     total_settled = len(settled)
     wins = sum(1 for s in settled if s.get("result") == "yes")
     losses = sum(1 for s in settled if s.get("result") == "no")
-    total_pnl = round(bankroll - INITIAL_BANKROLL, 4)
+    total_pnl = round(bankroll - config.PAPER_INITIAL_BANKROLL, 4)
     settled_stake = sum(s.get("stake", 0.0) for s in settled)
     settled_pnl = sum(s.get("net_pnl", 0.0) for s in settled)
     roi_pct = (settled_pnl / settled_stake * 100) if settled_stake > 0 else 0.0

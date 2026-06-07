@@ -24,7 +24,6 @@ from flask import Flask, jsonify, render_template_string
 
 from adapters import adapter_for, all_adapters
 from find_ev_bet import (
-    PROP_MIN_EDGE_PCT,
     SNAP_PIN,
     MAX_SNAPSHOT_AGE_SEC,
     american_to_decimal,
@@ -36,9 +35,10 @@ from find_ev_bet import (
 )
 import paper_tracker
 import real_tracker
+import config
 
-REFRESH_SEC = 60
-LADDER_FETCH_TIMEOUT_SEC = float(os.getenv("LADDER_FETCH_TIMEOUT_SEC", "5.0"))
+REFRESH_SEC = config.DASHBOARD_REFRESH_SEC
+LADDER_FETCH_TIMEOUT_SEC = config.LADDER_FETCH_TIMEOUT_SEC
 _LADDER_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ladder")
 # Superset matcher produces candidates across ML / spread / total / team_total
 # and across every registered book. A larger slice lets the client-side filter
@@ -144,11 +144,11 @@ def scan_once():
 
             shares, stake, exp_profit, levels = walk_ladder(ladder, fair, fee_fn)
             ev_pct_on_stake = (exp_profit / stake * 100) if stake > 0 else 0.0
-            if c["market_type"] == "player_prop" and ev_pct_on_stake < PROP_MIN_EDGE_PCT:
+            if c["market_type"] == "player_prop" and ev_pct_on_stake < config.PROP_MIN_EDGE_PCT:
                 continue
             is_prop = c["market_type"] == "player_prop"
-            max_edge = (paper_tracker.SANITY_MAX_EDGE_PCT_PROP if is_prop
-                        else paper_tracker.SANITY_MAX_EDGE_PCT)
+            max_edge = (config.SANITY_MAX_EDGE_PCT_PROP if is_prop
+                        else config.SANITY_MAX_EDGE_PCT)
             if ev_pct_on_stake > max_edge:
                 continue
 
@@ -1026,7 +1026,7 @@ def main():
     real_tracker.start_close_capture_thread()
     real_tracker.start_order_polling_thread()
     real_tracker.start_balance_logging_thread()
-    host = os.environ.get("EV_DASHBOARD_HOST", "127.0.0.1")
+    host = config.EV_DASHBOARD_HOST
     print(f"dashboard starting on http://{host}:5055")
     app.run(host=host, port=5055, debug=False, use_reloader=False)
 

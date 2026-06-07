@@ -25,13 +25,14 @@ sys.path.insert(0, DIR)
 
 from adapters import adapter_for
 import paper_tracker as pt
+import config
 
 DATA_DIR = os.path.join(DIR, "data")
 TRADES = os.path.join(DATA_DIR, "paper_trades.jsonl")
 SETTLES = os.path.join(DATA_DIR, "paper_settlements.jsonl")
 
 HAIRCUT_K = float(os.environ.get("HAIRCUT_K", "0.064"))
-KELLY_FRACTION = pt.KELLY_FRACTION
+KELLY_FRACTION = config.KELLY_FRACTION
 
 
 def _read(path):
@@ -79,7 +80,7 @@ def _resize_under_haircut(trade, bankroll):
 def _passes_threshold(book, sized, is_prop):
     edge_pct = (sized["expected_profit"] / sized["stake"] * 100.0
                 if sized["stake"] > 0 else 0.0)
-    floor = pt._min_edge_pct(book, sized["avg_fill_price"], is_prop)
+    floor = config.min_edge_pct(book, "player_prop" if is_prop else "moneyline", sized["avg_fill_price"])
     return edge_pct >= floor, edge_pct, floor
 
 
@@ -134,7 +135,7 @@ def main():
     # require time-ordering and chained settlements — but it's close enough
     # for relative selection comparison.
     for t in trades:
-        bankroll = t.get("bankroll_at_placement") or pt.INITIAL_BANKROLL
+        bankroll = t.get("bankroll_at_placement") or config.PAPER_INITIAL_BANKROLL
         is_prop = t.get("market_type") == "player_prop"
 
         out = _resize_under_haircut(t, bankroll)
@@ -153,7 +154,7 @@ def main():
             continue
 
         # Sanity ceiling — same as paper tracker placement
-        max_edge = (pt.SANITY_MAX_EDGE_PCT_PROP if is_prop else pt.SANITY_MAX_EDGE_PCT)
+        max_edge = (config.SANITY_MAX_EDGE_PCT_PROP if is_prop else config.SANITY_MAX_EDGE_PCT)
         if new_edge_pct > max_edge:
             dropped.append({"trade": t, "reason": f"edge_pct {new_edge_pct:.2f} > sanity {max_edge}"})
             continue

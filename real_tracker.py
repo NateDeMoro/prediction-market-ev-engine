@@ -39,44 +39,8 @@ import uuid
 from datetime import datetime, timezone
 
 import paper_tracker as pt
+import config
 from adapters import adapter_for, kalshi_trade, polymarket_trade
-
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-
-INITIAL_BANKROLL = 1000.0
-INITIAL_KALSHI_BALANCE = 500.0
-INITIAL_POLYMARKET_BALANCE = 500.0
-KELLY_FRACTION = 0.25
-PER_MATCH_STAKE_CAP_PCT = 0.03
-PER_MATCH_BET_CAP = 2
-
-# Threshold formula identical to paper_tracker. Reuse paper_tracker._min_edge_pct
-# directly so the two trackers stay in lockstep.
-MIN_EDGE_PCT = pt.MIN_EDGE_PCT
-PROP_MIN_EDGE_PCT = pt.PROP_MIN_EDGE_PCT
-SANITY_MAX_EDGE_PCT = pt.SANITY_MAX_EDGE_PCT
-SANITY_MAX_EDGE_PCT_PROP = pt.SANITY_MAX_EDGE_PCT_PROP
-
-PER_BET_HARD_CAP_USD = float(os.getenv("REAL_PER_BET_HARD_CAP_USD", "30.0"))
-DAILY_LOSS_HALT_USD = float(os.getenv("REAL_DAILY_LOSS_HALT_USD", "-100.0"))
-INCLUDE_PROPS = os.getenv("REAL_INCLUDE_PROPS") == "1"
-REAL_TRADING_ENABLED = os.getenv("REAL_TRADING_ENABLED") == "1"
-
-SETTLEMENT_POLL_SEC = 30 * 60
-ORDER_POLL_SEC = 5
-CLOSE_CAPTURE_POLL_SEC = pt.CLOSE_CAPTURE_POLL_SEC
-BALANCE_LOG_POLL_SEC = 5 * 60
-
-DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(DIR, "data")
-TRADES_PATH = os.path.join(DATA_DIR, "real_trades.jsonl")
-FILLS_PATH = os.path.join(DATA_DIR, "real_fills.jsonl")
-SETTLEMENTS_PATH = os.path.join(DATA_DIR, "real_settlements.jsonl")
-CLOSES_PATH = os.path.join(DATA_DIR, "real_closes.jsonl")
-HALT_PATH = os.path.join(DATA_DIR, "real_halt.json")
-BALANCE_SNAPSHOT_PATH = os.path.join(DATA_DIR, "balance_snapshots.jsonl")
 
 _TRADE_ADAPTERS = {
     "kalshi": kalshi_trade,
@@ -94,8 +58,8 @@ _open_positions = {}      # key -> placement record (status in pending/partial/f
 _settled_records = []
 _closes_by_key = {}
 _fills = []
-_kalshi_balance = INITIAL_KALSHI_BALANCE
-_polymarket_balance = INITIAL_POLYMARKET_BALANCE
+_kalshi_balance = config.INITIAL_KALSHI_BALANCE
+_polymarket_balance = config.INITIAL_POLYMARKET_BALANCE
 _settle_defer_warned = set()  # keys we've already logged a deferred-settle warning for
 
 
@@ -116,24 +80,24 @@ def _utc_today():
 
 
 def _read_halt():
-    if not os.path.exists(HALT_PATH):
+    if not os.path.exists(config.REAL_HALT_PATH):
         return None
     try:
-        with open(HALT_PATH) as f:
+        with open(config.REAL_HALT_PATH) as f:
             return json.load(f)
     except (OSError, json.JSONDecodeError):
         return None
 
 
 def _write_halt(reason, pnl):
-    os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(config.DATA_DIR, exist_ok=True)
     payload = {
         "halt_date": _utc_today(),
         "halted_at": datetime.now(timezone.utc).isoformat(),
         "reason": reason,
         "pnl_at_halt": round(pnl, 4),
     }
-    with open(HALT_PATH, "w") as f:
+    with open(config.REAL_HALT_PATH, "w") as f:
         json.dump(payload, f)
     return payload
 
@@ -141,7 +105,7 @@ def _write_halt(reason, pnl):
 def _halt_active():
     # In-memory check first: settled-today P&L below threshold halts immediately,
     # without waiting for the halt file write inside _settle_one to complete.
-    if _today_realized_pnl() <= DAILY_LOSS_HALT_USD:
+    if _today_realized_pnl() <= config.DAILY_LOSS_HALT_USD:
         return True
     h = _read_halt()
     if not h:
@@ -189,10 +153,10 @@ def _replay_state():
     reconciled stake, matching the live state.
     """
     global _kalshi_balance, _polymarket_balance
-    trades = pt._read_jsonl(TRADES_PATH)
-    settlements = pt._read_jsonl(SETTLEMENTS_PATH)
-    closes = pt._read_jsonl(CLOSES_PATH)
-    fills = pt._read_jsonl(FILLS_PATH)
+    trades = pt._read_jsonl(config.REAL_TRADES_PATH)
+    settlements = pt._read_jsonl(config.REAL_SETTLEMENTS_PATH)
+    closes = pt._read_jsonl(config.REAL_CLOSES_PATH)
+    fills = pt._read_jsonl(config.REAL_FILLS_PATH)
 
     _placements.clear()
     _placed_keys.clear()
@@ -247,8 +211,8 @@ def _replay_state():
         if t.get("status") in ("pending", "partial", "filled", "ambiguous"):
             _open_positions[k] = t
 
-    _kalshi_balance = INITIAL_KALSHI_BALANCE
-    _polymarket_balance = INITIAL_POLYMARKET_BALANCE
+    _kalshi_balance = config.INITIAL_KALSHI_BALANCE
+    _polymarket_balance = config.INITIAL_POLYMARKET_BALANCE
     for s in _settled_records:
         pnl = s.get("net_pnl") or 0
         if s.get("book") == "kalshi":
@@ -441,7 +405,7 @@ def maybe_place(row, ladder, now=None):
     if not market_id:
         return None
     is_prop = row.get("market_type") == "player_prop"
-    if is_prop and not INCLUDE_PROPS:
+    if is_prop and not config.REAL_INCLUDE_PROPS:
         return None
     side = row.get("side") or "yes"
     key = _key(book, market_id, side)
@@ -467,16 +431,16 @@ def maybe_place(row, ladder, now=None):
         ) if pin_matchup_id is not None else 0
         book_balance = _book_balance(book)
 
-    if pin_matchup_id is not None and open_bets_on_match >= PER_MATCH_BET_CAP:
+    if pin_matchup_id is not None and open_bets_on_match >= config.PER_MATCH_BET_CAP:
         return None
 
-    per_match_cap = INITIAL_BANKROLL * PER_MATCH_STAKE_CAP_PCT  # $30, paper-cap-equivalent
+    per_match_cap = config.REAL_INITIAL_BANKROLL * config.PER_MATCH_STAKE_CAP_PCT  # $30
     available_match_stake = max(0.0, per_match_cap - already_on_match)
     if available_match_stake <= 0:
         return None
 
     # Hard caps: per-bet ceiling, per-book balance
-    max_stake = min(available_match_stake, PER_BET_HARD_CAP_USD, book_balance)
+    max_stake = min(available_match_stake, config.PER_BET_HARD_CAP_USD, book_balance)
     if max_stake <= 0:
         return None
 
@@ -487,11 +451,11 @@ def maybe_place(row, ladder, now=None):
 
     edge_pct = (sized["expected_profit"] / sized["stake"] * 100.0
                 if sized["stake"] > 0 else 0.0)
-    min_edge = pt._min_edge_pct(book, sized["avg_fill_price"], is_prop)
+    min_edge = config.min_edge_pct(book, row.get("market_type"), sized["avg_fill_price"])
     if edge_pct < min_edge:
         return None
 
-    max_edge = SANITY_MAX_EDGE_PCT_PROP if is_prop else SANITY_MAX_EDGE_PCT
+    max_edge = config.SANITY_MAX_EDGE_PCT_PROP if is_prop else config.SANITY_MAX_EDGE_PCT
     if edge_pct > max_edge:
         return None  # silently — paper tracker logs these; we don't double-log
 
@@ -536,14 +500,14 @@ def maybe_place(row, ladder, now=None):
         "remaining_count": sized["shares"],
     }
 
-    if not REAL_TRADING_ENABLED:
+    if not config.REAL_TRADING_ENABLED:
         record["status"] = "dry_run"
         record["dry_run_reason"] = "REAL_TRADING_ENABLED!=1"
         with _lock:
             if key in _placed_keys:
                 return None
             _placed_keys.add(key)
-            pt._append_jsonl(TRADES_PATH, record)
+            pt._append_jsonl(config.REAL_TRADES_PATH, record)
             _placements.append(record)
         return record
 
@@ -614,7 +578,7 @@ def maybe_place(row, ladder, now=None):
                 record, record["avg_fill_price"], record["filled_count"],
                 actual_fee=actual_fee if isinstance(actual_fee, (int, float)) else None,
             )
-        pt._append_jsonl(TRADES_PATH, record)
+        pt._append_jsonl(config.REAL_TRADES_PATH, record)
         _placements.append(record)
         if record["status"] in ("pending", "partial", "filled", "ambiguous"):
             _open_positions[key] = record
@@ -748,7 +712,7 @@ def _poll_open_orders_once():
             }
             if record.get("broker_status"):
                 fill_event["broker_status"] = record["broker_status"]
-            pt._append_jsonl(FILLS_PATH, fill_event)
+            pt._append_jsonl(config.REAL_FILLS_PATH, fill_event)
             _fills.append(fill_event)
 
 
@@ -758,7 +722,7 @@ def _order_polling_loop():
             _poll_open_orders_once()
         except Exception:
             traceback.print_exc()
-        time.sleep(ORDER_POLL_SEC)
+        time.sleep(config.ORDER_POLL_SEC)
 
 
 def start_order_polling_thread():
@@ -854,12 +818,12 @@ def _settle_one(record):
             settlement["fair_prob_close"] = fpc
             if isinstance(avg_fill, (int, float)) and isinstance(fpc, (int, float)):
                 settlement["clv"] = round(fpc - avg_fill, 6)
-        pt._append_jsonl(SETTLEMENTS_PATH, settlement)
+        pt._append_jsonl(config.REAL_SETTLEMENTS_PATH, settlement)
         _settled_records.append(settlement)
 
         # Daily loss halt check
-        if _today_realized_pnl() <= DAILY_LOSS_HALT_USD and not _halt_active():
-            _write_halt(f"realized PnL <= ${DAILY_LOSS_HALT_USD}", _today_realized_pnl())
+        if _today_realized_pnl() <= config.DAILY_LOSS_HALT_USD and not _halt_active():
+            _write_halt(f"realized PnL <= ${config.DAILY_LOSS_HALT_USD}", _today_realized_pnl())
     return settlement
 
 
@@ -879,7 +843,7 @@ def _settlement_loop():
             poll_settlements_once()
         except Exception:
             traceback.print_exc()
-        time.sleep(SETTLEMENT_POLL_SEC)
+        time.sleep(config.SETTLEMENT_POLL_SEC)
 
 
 def start_settlement_thread():
@@ -904,10 +868,10 @@ def _capture_closes_once():
         if start is None:
             continue
         dt = (start - now).total_seconds()
-        if dt < -pt.CLOSE_CAPTURE_TRAIL_SEC:
+        if dt < -config.CLOSE_CAPTURE_TRAIL_SEC:
             continue
         is_prop = r.get("market_type") == "player_prop"
-        if not is_prop and dt > pt.CLOSE_CAPTURE_LEAD_SEC:
+        if not is_prop and dt > config.CLOSE_CAPTURE_LEAD_SEC:
             continue
         relevant.append(r)
     if not relevant:
@@ -961,7 +925,7 @@ def _capture_close_for(record, pin_rows, now):
         "opposite_side_price_close": opp_px,
     }
     with _lock:
-        pt._append_jsonl(CLOSES_PATH, close)
+        pt._append_jsonl(config.REAL_CLOSES_PATH, close)
         _closes_by_key[key] = close
     return close
 
@@ -972,7 +936,7 @@ def _close_capture_loop():
             _capture_closes_once()
         except Exception:
             traceback.print_exc()
-        time.sleep(CLOSE_CAPTURE_POLL_SEC)
+        time.sleep(config.CLOSE_CAPTURE_POLL_SEC)
 
 
 def start_close_capture_thread():
@@ -1081,7 +1045,7 @@ def _snapshot_balances_once():
         "open_positions": open_positions,
         "open_position_count": len(open_positions),
     }
-    pt._append_jsonl(BALANCE_SNAPSHOT_PATH, snapshot)
+    pt._append_jsonl(config.BALANCE_SNAPSHOT_PATH, snapshot)
 
     kalshi_cash_str = f"${kalshi_dollars:.2f}" if kalshi_dollars is not None else f"ERR({kalshi_err})"
     poly_cash_str = f"${poly_dollars:.2f}" if poly_dollars is not None else f"ERR({poly_err})"
@@ -1102,7 +1066,7 @@ def _balance_logging_loop():
             _snapshot_balances_once()
         except Exception:
             traceback.print_exc()
-        time.sleep(BALANCE_LOG_POLL_SEC)
+        time.sleep(config.BALANCE_LOG_POLL_SEC)
 
 
 def start_balance_logging_thread():
@@ -1167,7 +1131,7 @@ def snapshot():
     dry_run_count = sum(1 for p in placements if p.get("status") == "dry_run")
 
     return {
-        "real_trading_enabled": REAL_TRADING_ENABLED,
+        "real_trading_enabled": config.REAL_TRADING_ENABLED,
         "bankroll": round(bankroll, 4),
         "kalshi_balance": round(kalshi_bal, 4),
         "polymarket_balance": round(poly_bal, 4),
@@ -1175,8 +1139,8 @@ def snapshot():
         "polymarket_cash": round(poly_cash, 4),
         "open_position_value_kalshi": round(open_value_kalshi, 4),
         "open_position_value_polymarket": round(open_value_polymarket, 4),
-        "initial_bankroll": INITIAL_BANKROLL,
-        "kelly_fraction": KELLY_FRACTION,
+        "initial_bankroll": config.REAL_INITIAL_BANKROLL,
+        "kelly_fraction": config.KELLY_FRACTION,
         "halt": halt,
         "open_positions": open_list,
         "settled": settled,
@@ -1195,6 +1159,6 @@ def snapshot():
             "avg_clv": avg_clv,
             "avg_fair_delta": avg_fair_delta,
             "today_realized_pnl": round(_today_realized_pnl(), 4),
-            "daily_loss_halt_usd": DAILY_LOSS_HALT_USD,
+            "daily_loss_halt_usd": config.DAILY_LOSS_HALT_USD,
         },
     }

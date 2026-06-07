@@ -29,7 +29,7 @@ from adapters.common import (
     soccer_league_whitelisted,
     team_in_league,
 )
-from market_config import market_enabled
+from config import market_enabled
 
 PIN_PERIOD_LABEL = {0: "FULL", 1: "1H", 2: "2H"}
 PERIOD_LABEL_TO_INT = {v: k for k, v in PIN_PERIOD_LABEL.items()}

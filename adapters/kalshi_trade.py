@@ -32,12 +32,13 @@ from pathlib import Path
 import requests
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
+import config
 
 BOOK = "kalshi"
 BASE = "https://api.elections.kalshi.com/trade-api/v2"
 ORDERS_PATH = "/trade-api/v2/portfolio/orders"
 BALANCE_PATH = "/trade-api/v2/portfolio/balance"
-REQUEST_TIMEOUT = 15
+REQUEST_TIMEOUT = config.ADAPTER_TRADE_TIMEOUT
 
 
 def _int_fp(value) -> int:
