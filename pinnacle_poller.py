@@ -49,7 +49,7 @@ if not API_KEY:
         "systemd EnvironmentFile (.env) before starting the poller."
     )
 
-POLL_INTERVAL_SEC      = config.POLLER_INTERVAL_SEC
+POLL_INTERVAL_SEC      = config.PINNACLE_POLL_INTERVAL_SEC
 WINDOW_HOURS           = config.PINNACLE_WINDOW_HOURS
 LIVE_LOOKBACK_HOURS    = config.PINNACLE_LIVE_LOOKBACK_HOURS
 REQUEST_TIMEOUT        = config.POLLER_REQUEST_TIMEOUT

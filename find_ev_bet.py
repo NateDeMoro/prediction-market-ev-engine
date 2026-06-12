@@ -21,13 +21,15 @@ import time
 from datetime import datetime, timezone, timedelta
 
 from adapters import all_adapters, adapter_for
+from data_utils import stale_snapshot_reason
 from devig_utils import american_to_decimal, devig_multiplicative
 from market_matcher import match_all_markets, parse_iso
 import config
 
 # Re-export from config so ev_dashboard can still import these from here.
 SNAP_PIN           = config.PIN_SNAPSHOT_DIR
-MAX_SNAPSHOT_AGE_SEC = config.MAX_SNAPSHOT_AGE_SEC
+MAX_PIN_SNAPSHOT_AGE_SEC  = config.MAX_PIN_SNAPSHOT_AGE_SEC
+MAX_SOFT_SNAPSHOT_AGE_SEC = config.MAX_SOFT_SNAPSHOT_AGE_SEC
 MIN_HOURS_TO_START = config.MIN_HOURS_TO_START
 MAX_HOURS_TO_START = config.MAX_HOURS_TO_START
 
@@ -273,15 +275,14 @@ def main():
         print("ERROR: no soft-book snapshots found")
         sys.exit(1)
 
-    if pin_age > MAX_SNAPSHOT_AGE_SEC:
-        print(f"ERROR: pinnacle snapshot too old ({pin_age:.0f}s)")
+    reason = stale_snapshot_reason(
+        pin_age, soft_ages,
+        MAX_PIN_SNAPSHOT_AGE_SEC, MAX_SOFT_SNAPSHOT_AGE_SEC,
+        missing_soft_is_stale=False,
+    )
+    if reason:
+        print(f"ERROR: {reason}")
         sys.exit(1)
-    for book, age in soft_ages.items():
-        if age is None:
-            continue
-        if age > MAX_SNAPSHOT_AGE_SEC:
-            print(f"ERROR: {book} snapshot too old ({age:.0f}s)")
-            sys.exit(1)
 
     ages_str = "  ".join(
         f"{book}={age:.0f}s" if age is not None else f"{book}=MISSING"

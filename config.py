@@ -293,7 +293,8 @@ DAILY_LOSS_HALT_USD    = float(os.getenv("REAL_DAILY_LOSS_HALT_USD",   "-100.0")
 # 4. Timing / pacing
 # ---------------------------------------------------------------------------
 
-# Shared poller constants (all three pollers run on the same cadence).
+# Shared poller cadence for the soft books (Kalshi, Polymarket). Pinnacle
+# overrides this with its own faster interval (PINNACLE_POLL_INTERVAL_SEC).
 POLLER_INTERVAL_SEC      = 60
 POLLER_SNAPSHOT_RETENTION = 60   # keep the N most recent snapshots (≈ last hour)
 POLLER_REQUEST_TIMEOUT   = 15
@@ -308,12 +309,18 @@ KALSHI_DEAD_SERIES_SKIP_AFTER  = 3
 KALSHI_DEAD_SERIES_RETRY_AFTER = 5
 
 # Pinnacle poller specifics.
-PINNACLE_WINDOW_HOURS          = 24
-PINNACLE_LIVE_LOOKBACK_HOURS   = 6
+PINNACLE_WINDOW_HOURS          = 3.25   # pregame upper bound (now + 3h15m); just above the 3h betting-window max
+PINNACLE_LIVE_LOOKBACK_HOURS   = 0.5    # live rows for last 30m; covers the 15-min close-capture trail with margin
 PINNACLE_INTER_REQUEST_SLEEP   = 0.2   # global min-interval (~10 req/s baseline); backoff on 429
 PINNACLE_MAX_WORKERS           = 4      # gate bounds the rate regardless; this only tunes I/O overlap
 PINNACLE_RATE_LIMIT_RETRIES    = 4
 PINNACLE_RATE_LIMIT_BACKOFF_SEC = 2.0
+# Pinnacle polls faster than the soft books: its snapshot is the only
+# price-accuracy risk (soft ladders are pulled live). The interval is the
+# freshness floor — keep it <= MAX_PIN_SNAPSHOT_AGE_SEC so a healthy snapshot
+# never trips the gate. Watch rate_limit_429 in the sidecars; back off to
+# 35-40 if it climbs.
+PINNACLE_POLL_INTERVAL_SEC     = 30
 
 # Polymarket poller specifics.
 POLYMARKET_MAX_WORKERS         = 4
@@ -338,8 +345,14 @@ BALANCE_LOG_POLL_SEC    = 5 * 60
 DASHBOARD_REFRESH_SEC         = 60
 LADDER_FETCH_TIMEOUT_SEC      = float(os.getenv("LADDER_FETCH_TIMEOUT_SEC", "5.0"))
 
-# find_ev_bet / snapshot age.
-MAX_SNAPSHOT_AGE_SEC = 300
+# find_ev_bet / snapshot age. Two-tier by role: Pinnacle fair value is read
+# straight from its snapshot (price-accuracy risk) so it is gated tight; soft
+# books are re-fetched live at decision time so their snapshot age is only a
+# coverage/liveness check and is gated loose. A blanket value would either
+# false-reject the soft books (which are spaced 60-78s apart) or fail to
+# tighten Pinnacle.
+MAX_PIN_SNAPSHOT_AGE_SEC  = 45
+MAX_SOFT_SNAPSHOT_AGE_SEC = 120
 MIN_HOURS_TO_START   = 0.5
 MAX_HOURS_TO_START   = 3.0
 

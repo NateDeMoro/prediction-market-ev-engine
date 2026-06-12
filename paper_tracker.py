@@ -9,10 +9,11 @@ the adapter's settlement endpoint every 30 minutes to resolve open
 positions.
 
 Fees are modeled per-book via the adapter's `fee_on_win_per_share` and
-`fee_on_stake_per_share`:
-  - Kalshi: fee only on a winning outcome (5% of profit).
-  - Polymarket US: curved notional fee, paid upfront at placement
-    (0.05 * p * (1-p) per share).
+`fee_on_stake_per_share`. Both books charge a curved notional taker fee
+(rate * p * (1-p) per share) paid upfront at placement, with nothing
+skimmed on settlement (win-fee = 0). Rates live in
+`config.PER_BOOK_FEE_RATE` (the single source of truth); see the adapter
+fee functions for the per-book detail.
 
 Placement and settlement records carry a `book` field. Legacy rows
 without one replay as Kalshi to preserve pre-refactor bankroll.
