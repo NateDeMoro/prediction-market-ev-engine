@@ -30,7 +30,6 @@ SNAP_PIN           = config.PIN_SNAPSHOT_DIR
 MAX_SNAPSHOT_AGE_SEC = config.MAX_SNAPSHOT_AGE_SEC
 MIN_HOURS_TO_START = config.MIN_HOURS_TO_START
 MAX_HOURS_TO_START = config.MAX_HOURS_TO_START
-PROP_MIN_EDGE_PCT  = config.PROP_MIN_EDGE_PCT
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +100,46 @@ def breakeven_fair(price, fee_fn):
         else:
             lo = mid
     return (lo + hi) / 2
+
+
+def evaluate(ladder, fair, fee_fn, book, market_type):
+    """Walk ladder and apply the unified EV gate (floor + ceiling).
+
+    Returns a dict of computed metrics if the candidate is accepted, or None
+    if it fails any gate (no positive-EV levels, below floor, above ceiling).
+    Use when: deciding whether a candidate clears the bar for display or placement.
+
+    Gate sequence (mirrors paper_tracker.maybe_place):
+      1. walk_ladder — bail if shares == 0 (no profitable levels; near-miss).
+      2. config.min_edge_pct(book, market_type, avg_fill) — fee-adjusted floor.
+      3. config.SANITY_MAX_EDGE_PCT[_PROP] — ceiling against likely matcher noise.
+    """
+    if not ladder:
+        return None
+
+    shares, stake, exp_profit, levels = walk_ladder(ladder, fair, fee_fn)
+    if shares == 0:
+        return None
+
+    ev_pct = exp_profit / stake * 100 if stake > 0 else 0.0
+    avg_fill = stake / shares
+
+    if ev_pct < config.min_edge_pct(book, market_type, avg_fill):
+        return None
+
+    is_prop = market_type == "player_prop"
+    max_edge = config.SANITY_MAX_EDGE_PCT_PROP if is_prop else config.SANITY_MAX_EDGE_PCT
+    if ev_pct > max_edge:
+        return None
+
+    return {
+        "shares": shares,
+        "stake": stake,
+        "exp_profit": exp_profit,
+        "ev_pct": ev_pct,
+        "avg_fill": avg_fill,
+        "levels": levels,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -277,23 +316,26 @@ def main():
         for side, ladder, fair in sides:
             if not ladder:
                 continue
-            shares, stake, exp_profit, levels = walk_ladder(ladder, fair, fee_fn)
             best_ask, best_qty = ladder[0]
             side_ctx = {**c, "side": side, "fair_prob": fair}
-            if shares == 0:
-                gross = 1 - best_ask
-                ev = fair * gross - (1 - fair) * best_ask - fee_fn(best_ask, fair)
-                near_misses.append((ev, side_ctx, best_ask, best_qty))
-                continue
-            ev_pct = exp_profit / stake * 100 if stake > 0 else 0
-            # Props carry a higher min-edge gate (Pinnacle prop max-stake is ~$250
-            # vs ~$7.5k+ for team markets — noisier quotes need a bigger cushion).
-            if c["market_type"] == "player_prop" and ev_pct < PROP_MIN_EDGE_PCT:
+            ev_result = evaluate(ladder, fair, fee_fn, nm.book, c["market_type"])
+            if ev_result is None:
+                # Near-miss: best ask itself has no positive EV (gate rejections
+                # above the floor/ceiling drop silently without near-miss tracking).
+                ev = (fair * (1 - best_ask)
+                      - (1 - fair) * best_ask
+                      - fee_fn(best_ask, fair))
+                if ev <= 0:
+                    near_misses.append((ev, side_ctx, best_ask, best_qty))
                 continue
             results.append({
-                **side_ctx, "shares": shares, "stake": stake,
-                "expected_profit": exp_profit, "ev_pct": ev_pct,
-                "levels": levels, "ladder_top": ladder[:10],
+                **side_ctx,
+                "shares": ev_result["shares"],
+                "stake": ev_result["stake"],
+                "expected_profit": ev_result["exp_profit"],
+                "ev_pct": ev_result["ev_pct"],
+                "levels": ev_result["levels"],
+                "ladder_top": ladder[:10],
             })
 
     print(f"[eval] +EV markets: {len(results)}  near-misses: {len(near_misses)}")

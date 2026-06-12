@@ -41,7 +41,6 @@ BASE = "https://api.elections.kalshi.com/trade-api/v2"
 
 POLL_INTERVAL_SEC      = config.POLLER_INTERVAL_SEC
 WINDOW_HOURS           = config.KALSHI_WINDOW_HOURS
-SERIES_REFRESH_SEC     = config.KALSHI_SERIES_REFRESH_SEC
 REQUEST_TIMEOUT        = config.POLLER_REQUEST_TIMEOUT
 MAX_WORKERS            = config.KALSHI_MAX_WORKERS
 RATE_LIMIT_RETRIES     = config.KALSHI_RATE_LIMIT_RETRIES
@@ -270,7 +269,8 @@ def run_cycle(prev_fps, core_series, dead_counts, cycle_num):
     rate_limit_429 = _gate.reset_and_get_429()
     write_sec = 0.0
     if snapshot:
-        path = os.path.join(SNAPSHOT_DIR, now.strftime("%Y%m%dT%H%M%SZ") + ".jsonl")
+        write_now = datetime.now(timezone.utc)
+        path = os.path.join(SNAPSHOT_DIR, write_now.strftime("%Y%m%dT%H%M%SZ") + ".jsonl")
         write_start = time.monotonic()
         atomic_write_jsonl(
             path, snapshot, dumps_kwargs={"default": str}, logger=log
@@ -310,14 +310,6 @@ def main():
         f"include_props={INCLUDE_PROPS}"
     )
 
-    try:
-        core_series = fetch_core_sports_series()
-    except requests.RequestException as e:
-        log(f"failed to list sports series on startup: {e}")
-        return
-    log(f"loaded {len(core_series)} core sports series")
-    series_loaded_at = time.time()
-
     prev_fps = {}
     dead_counts = {}
     cycle = 0
@@ -325,15 +317,8 @@ def main():
         cycle += 1
         t0 = time.time()
 
-        if t0 - series_loaded_at > SERIES_REFRESH_SEC:
-            try:
-                core_series = fetch_core_sports_series()
-                series_loaded_at = t0
-                log(f"refreshed sports series list: {len(core_series)} entries")
-            except requests.RequestException as e:
-                log(f"series refresh failed (keeping old list): {e}")
-
         try:
+            core_series = fetch_core_sports_series()
             prev_fps, stats = run_cycle(
                 prev_fps, core_series, dead_counts, cycle
             )

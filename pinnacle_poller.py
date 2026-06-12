@@ -309,8 +309,16 @@ def collect_prop_rows(parent_matchup, sport_name, prev_fps):
         return [], {}, [], None
 
     # Build child_matchupId -> (player, stat, units) for every player-prop child.
+    # Also build participantId -> "over"/"under" from each special matchup's
+    # participants list (alignment is "neutral" for both legs; name is "Over"/"Under").
     prop_meta = {}
+    participant_name_by_id = {}
     for m in related:
+        for p in m.get("participants") or []:
+            pid = p.get("id")
+            name = (p.get("name") or "").lower()
+            if pid is not None and name in ("over", "under"):
+                participant_name_by_id[pid] = name
         if m.get("type") != "special":
             continue
         sp = m.get("special") or {}
@@ -339,9 +347,19 @@ def collect_prop_rows(parent_matchup, sport_name, prev_fps):
         if prop_id not in prop_meta:
             continue
         player, stat, units = prop_meta[prop_id]
-        prices = mk.get("prices") or []
-        # Prop price rows have no 'designation'; line lives in prices[*].points.
-        line = next((p.get("points") for p in prices if p.get("points") is not None), None)
+        raw_prices = mk.get("prices") or []
+        line = next((p.get("points") for p in raw_prices if p.get("points") is not None), None)
+
+        # Stamp each price with its Over/Under designation via participantId lookup.
+        # Pinnacle prop participants carry name="Over"/"Under"; alignment is "neutral"
+        # for both legs and cannot be used for discrimination.
+        labeled_prices = []
+        for p in raw_prices:
+            desig = participant_name_by_id.get(p.get("participantId"))
+            if desig is None:
+                log(f"  ! PROP designation unknown participantId={p.get('participantId')}"
+                    f" {player} ({stat}) matchupId={prop_id}")
+            labeled_prices.append({**p, "designation": desig})
 
         # Custom fingerprint key: prop child id is unique per (player, stat).
         k = f"prop|{prop_id}"
@@ -350,9 +368,9 @@ def collect_prop_rows(parent_matchup, sport_name, prev_fps):
         if prev_fps.get(k) != fp:
             tag = "NEW" if prev_fps.get(k) is None else "CHG"
             ps = " | ".join(
-                f"{p.get('participantId','?')}={p.get('price'):+d}"
-                if isinstance(p.get('price'), int) else f"{p.get('participantId','?')}={p.get('price')}"
-                for p in prices
+                f"{p.get('designation','?')}={p.get('price'):+d}"
+                if isinstance(p.get('price'), int) else f"{p.get('designation','?')}={p.get('price')}"
+                for p in labeled_prices
             )
             log_lines.append(f"{tag} {matchup_str} PROP {player} ({stat}) line={line}: {ps}")
 
@@ -370,7 +388,7 @@ def collect_prop_rows(parent_matchup, sport_name, prev_fps):
             "stat": stat,
             "stat_units": units,
             "line": line,
-            "prices": prices,
+            "prices": labeled_prices,
         })
 
     return rows, fp_updates, log_lines, None
@@ -499,8 +517,9 @@ def run_cycle(prev_fps):
     rate_limit_429 = _gate.reset_and_get_429()
     write_sec = 0.0
     if snapshot:
+        write_now = datetime.now(timezone.utc)
         snap_path = os.path.join(
-            SNAPSHOT_DIR, now.strftime("%Y%m%dT%H%M%SZ") + ".jsonl"
+            SNAPSHOT_DIR, write_now.strftime("%Y%m%dT%H%M%SZ") + ".jsonl"
         )
         write_start = time.monotonic()
         atomic_write_jsonl(

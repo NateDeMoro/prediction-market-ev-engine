@@ -300,7 +300,6 @@ POLLER_REQUEST_TIMEOUT   = 15
 
 # Kalshi poller specifics.
 KALSHI_WINDOW_HOURS          = 24
-KALSHI_SERIES_REFRESH_SEC    = 3600   # re-list sports series hourly
 KALSHI_MAX_WORKERS           = 3      # gate bounds the rate; workers only tune I/O overlap
 KALSHI_RATE_LIMIT_RETRIES    = 4
 KALSHI_RATE_LIMIT_BACKOFF_SEC = 2.0
@@ -317,7 +316,10 @@ PINNACLE_RATE_LIMIT_RETRIES    = 4
 PINNACLE_RATE_LIMIT_BACKOFF_SEC = 2.0
 
 # Polymarket poller specifics.
-POLYMARKET_MAX_WORKERS = 4
+POLYMARKET_MAX_WORKERS         = 4
+POLYMARKET_INTER_REQUEST_SLEEP = 0.2   # global min-interval (~5 req/s baseline); tune against sidecar rate_limit_429
+POLYMARKET_RATE_LIMIT_RETRIES  = 4
+POLYMARKET_RATE_LIMIT_BACKOFF_SEC = 2.0
 
 # Adapter timeouts (read adapters are more lenient; trade adapters wait longer
 # to distinguish ambiguous vs definitive placement failures).
