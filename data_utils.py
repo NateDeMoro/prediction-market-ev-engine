@@ -100,9 +100,9 @@ def make_logger(_log_path=None):
 def prune_snapshots(dir_path, keep_n):
     """Delete all but the `keep_n` most recent *.jsonl files under dir_path.
 
-    Ordering is by filename (our timestamp prefix sorts chronologically), so
-    this is resilient to mtime skew if snapshots are ever copied between
-    machines. `.tmp` files are ignored — they're in-flight atomic writes.
+    Ordering is by filename (timestamp is the file write time, so filenames
+    sort chronologically). Resilient to mtime skew if snapshots are copied
+    between machines. `.tmp` files are ignored — they're in-flight atomic writes.
     """
     try:
         names = sorted(n for n in os.listdir(dir_path) if n.endswith(".jsonl"))

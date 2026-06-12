@@ -14,6 +14,8 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
+
 DATA = Path(__file__).parent.parent / "1000BetsTracked"
 
 
@@ -99,9 +101,7 @@ def stats(values):
     n = len(values)
     mean = sum(values) / n
     sorted_v = sorted(values)
-    med = sorted_v[n // 2]
-    p10 = sorted_v[int(n * 0.10)]
-    p90 = sorted_v[int(n * 0.90)]
+    p10, med, p90 = np.percentile(sorted_v, [10, 50, 90])
     neg = sum(1 for v in values if v < -0.005)
     pos = sum(1 for v in values if v > 0.005)
     return {
@@ -148,10 +148,9 @@ def analyze(label, trades, closes_idx):
         if fair_prob_entry is None or fair_prob_close is None:
             continue
 
-        # Positive fair_delta = fair prob went up (favorable if we bet yes,
-        # adverse if we bet no). But side is always from our bet perspective.
-        # fair_prob is the yes-side probability in internal perspective.
-        # So fair_delta > 0 means the market moved in our favor.
+        # Both fair_prob (entry) and fair_prob_close are stored in side perspective:
+        # the winning probability of whichever side was bet (yes or no).
+        # So fair_delta > 0 always means the market moved in our favor.
         fair_delta = fair_prob_close - fair_prob_entry
 
         mins_placed = minutes_until_start(t.get("placed_at"), t.get("pin_start_time"))

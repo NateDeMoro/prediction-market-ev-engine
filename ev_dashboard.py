@@ -29,10 +29,10 @@ from find_ev_bet import (
     MAX_SNAPSHOT_AGE_SEC,
     american_to_decimal,
     breakeven_fair,
+    evaluate,
     find_matches,
     load_latest_snapshot,
     price_to_american,
-    walk_ladder,
 )
 import paper_tracker
 import real_tracker
@@ -165,14 +165,8 @@ def scan_once():
                             - (1 - fair) * best_ask
                             - fee_fn(best_ask, fair))
 
-            shares, stake, exp_profit, levels = walk_ladder(ladder, fair, fee_fn)
-            ev_pct_on_stake = (exp_profit / stake * 100) if stake > 0 else 0.0
-            if c["market_type"] == "player_prop" and ev_pct_on_stake < config.PROP_MIN_EDGE_PCT:
-                continue
-            is_prop = c["market_type"] == "player_prop"
-            max_edge = (config.SANITY_MAX_EDGE_PCT_PROP if is_prop
-                        else config.SANITY_MAX_EDGE_PCT)
-            if ev_pct_on_stake > max_edge:
+            ev_result = evaluate(ladder, fair, fee_fn, book, c["market_type"])
+            if ev_result is None:
                 continue
 
             rows.append({
@@ -201,10 +195,10 @@ def scan_once():
                 "ev_per_share": ev_per_share,
                 "ev_pct_at_best": ev_per_share / best_ask * 100 if best_ask else 0.0,
                 "breakeven_fair": breakeven_fair(best_ask, fee_fn),
-                "pos_shares": shares,
-                "pos_stake": stake,
-                "pos_expected_profit": exp_profit,
-                "pos_ev_pct": ev_pct_on_stake,
+                "pos_shares": ev_result["shares"],
+                "pos_stake": ev_result["stake"],
+                "pos_expected_profit": ev_result["exp_profit"],
+                "pos_ev_pct": ev_result["ev_pct"],
                 "pin_start_time": c.get("pin_start_time"),
                 "in_window": c.get("in_window", False),
                 "player": c.get("player"),

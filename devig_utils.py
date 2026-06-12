@@ -8,9 +8,9 @@ Open when: changing how American odds are converted or how vig is removed
 
 def american_to_decimal(a):
     """Standard American-odds to decimal. None in, None out. Uses |a| in the
-    denominator so both +N and -N are handled symmetrically. Assumes |a|>=100
-    (the Pinnacle convention); returns None on a=0 or non-numeric input so
-    callers handle degenerate quotes (0 = unquoted) without crashing."""
+    denominator so both +N and -N are handled symmetrically. Returns None on
+    a=0, non-numeric input, or 0 < a < 100 (non-standard sub-100 odds that
+    would silently invert the implied probability if allowed through)."""
     if a is None:
         return None
     try:
@@ -18,6 +18,8 @@ def american_to_decimal(a):
     except (TypeError, ValueError):
         return None
     if a == 0:
+        return None
+    if 0 < a < 100:
         return None
     if a >= 100:
         return 1.0 + a / 100.0

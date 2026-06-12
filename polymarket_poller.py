@@ -26,16 +26,19 @@ from datetime import datetime, timezone
 
 import requests
 
-from data_utils import atomic_write_jsonl, make_logger, prune_snapshots, write_snapshot_meta
+from data_utils import RateGate, atomic_write_jsonl, make_logger, prune_snapshots, write_snapshot_meta
 import config
 
 GATEWAY = "https://gateway.polymarket.us"
 LEAGUES = ("nba", "nhl", "mlb", "nfl", "wnba", "ncaaf", "ncaab")
 
-POLL_INTERVAL_SEC  = config.POLLER_INTERVAL_SEC
-REQUEST_TIMEOUT    = config.POLLER_REQUEST_TIMEOUT
-MAX_WORKERS        = config.POLYMARKET_MAX_WORKERS
-SNAPSHOT_RETENTION = config.POLLER_SNAPSHOT_RETENTION
+POLL_INTERVAL_SEC      = config.POLLER_INTERVAL_SEC
+REQUEST_TIMEOUT        = config.POLLER_REQUEST_TIMEOUT
+MAX_WORKERS            = config.POLYMARKET_MAX_WORKERS
+SNAPSHOT_RETENTION     = config.POLLER_SNAPSHOT_RETENTION
+INTER_REQUEST_SLEEP    = config.POLYMARKET_INTER_REQUEST_SLEEP
+RATE_LIMIT_RETRIES     = config.POLYMARKET_RATE_LIMIT_RETRIES
+RATE_LIMIT_BACKOFF_SEC = config.POLYMARKET_RATE_LIMIT_BACKOFF_SEC
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (ev-scanner)",
@@ -51,14 +54,34 @@ PID_PATH     = os.path.join(DATA_DIR, "polymarket.pid")
 
 _log = make_logger(LOG_PATH)
 
+_gate = RateGate(INTER_REQUEST_SLEEP)
+
+
+def get(url):
+    for attempt in range(RATE_LIMIT_RETRIES + 1):
+        _gate.claim_slot()
+        r = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        if r.status_code == 429 and attempt < RATE_LIMIT_RETRIES:
+            ra = r.headers.get("Retry-After")
+            try:
+                backoff = float(ra) if ra else RATE_LIMIT_BACKOFF_SEC * (2 ** attempt)
+            except ValueError:
+                backoff = RATE_LIMIT_BACKOFF_SEC * (2 ** attempt)
+            _gate.record_429(backoff)
+            continue
+        r.raise_for_status()
+        return r.json()
+    r.raise_for_status()
+
 
 def fetch_league_events(league):
     url = f"{GATEWAY}/v2/leagues/{league}/events"
-    r = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
-    if r.status_code == 404:
-        return []
-    r.raise_for_status()
-    return r.json().get("events") or []
+    try:
+        return get(url).get("events") or []
+    except requests.HTTPError as e:
+        if e.response is not None and e.response.status_code == 404:
+            return []
+        raise
 
 
 def flatten_event(event, league):
@@ -128,6 +151,7 @@ def flatten_event(event, league):
 
 def snapshot_once():
     start = time.time()
+    _gate.reset_and_get_429()  # discard stale count from between cycles
     rows = []
     errors = 0
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
@@ -144,7 +168,8 @@ def snapshot_once():
                 rows.extend(flatten_event(event, lg))
 
     os.makedirs(SNAPSHOT_DIR, exist_ok=True)
-    fname = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + ".jsonl"
+    write_now = datetime.now(timezone.utc)
+    fname = write_now.strftime("%Y%m%dT%H%M%SZ") + ".jsonl"
     path = os.path.join(SNAPSHOT_DIR, fname)
     fetch_sec = time.time() - start
     write_start = time.time()
@@ -153,11 +178,12 @@ def snapshot_once():
     )
     write_sec = time.time() - write_start
     dt = time.time() - start
+    rate_limit_429 = _gate.reset_and_get_429()
     write_snapshot_meta(path, {
         "cycle_elapsed_sec": dt,
         "fetch_sec": fetch_sec,
         "write_sec": write_sec,
-        "rate_limit_429": 0,
+        "rate_limit_429": rate_limit_429,
     }, logger=_log)
     prune_snapshots(SNAPSHOT_DIR, SNAPSHOT_RETENTION)
     _log(f"cycle rows={len(rows)} leagues={len(LEAGUES)} errors={errors} "

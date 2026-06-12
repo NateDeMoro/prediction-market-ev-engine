@@ -31,9 +31,15 @@ def _load_jsonl(path):
     return out
 
 
-def _market_key(r: dict) -> str | None:
+def _close_key(r: dict) -> tuple | None:
     # Schema drift: older rows used `ticker`, newer ones use `market_id`.
-    return r.get("market_id") or r.get("ticker")
+    # fair_prob_close is stored in side-perspective, so the key must include
+    # side — otherwise YES and NO closes for the same market collide.
+    mid = r.get("market_id") or r.get("ticker")
+    if mid is None:
+        return None
+    book = r.get("book") or "kalshi"
+    return (book, mid, r.get("side") or "yes")
 
 
 def _book(t: dict) -> str:
@@ -44,18 +50,18 @@ def estimate(trades_path: str, closes_path: str) -> dict:
     trades = _load_jsonl(trades_path)
     closes = _load_jsonl(closes_path)
 
-    closes_by_id: dict[str, dict] = {}
+    closes_by_id: dict[tuple, dict] = {}
     for c in closes:
-        m = _market_key(c)
-        if m is None:
+        k = _close_key(c)
+        if k is None:
             continue
-        prev = closes_by_id.get(m)
+        prev = closes_by_id.get(k)
         if prev is None or c["captured_at"] > prev["captured_at"]:
-            closes_by_id[m] = c
+            closes_by_id[k] = c
 
     pairs = []
     for t in trades:
-        c = closes_by_id.get(_market_key(t))
+        c = closes_by_id.get(_close_key(t))
         if c is None:
             continue
         pairs.append({

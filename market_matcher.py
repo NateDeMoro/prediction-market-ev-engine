@@ -451,20 +451,24 @@ def _pinnacle_prop_fuzzy_lookup(idx, matchup_id, stat, pkey):
 
 def _find_prop_prices(pin_prop_rows, line):
     """Find the Pinnacle prop row whose line matches `line`. Return
-    (over_price, under_price) or None. Pinnacle prop prices have
-    participant order [Over, Under] per participants[0/1] in the related
-    matchup — captured by `pinnacle_poller.collect_prop_rows` which preserves
-    that order in the prices list.
+    (row, over_price, under_price) or None.
+
+    Prices are keyed by designation ("over"/"under") stamped at capture time
+    by `pinnacle_poller.collect_prop_rows` via participantId cross-reference.
+    Positional order is not trusted.
     """
     for r in pin_prop_rows:
         if abs((r.get("line") or 0) - line) >= 1e-9:
             continue
         prices = r.get("prices") or []
-        if len(prices) != 2:
-            continue
-        # prices[0] = Over (participants order 0); prices[1] = Under.
-        over_price = prices[0].get("price")
-        under_price = prices[1].get("price")
+        over_price = None
+        under_price = None
+        for p in prices:
+            d = p.get("designation")
+            if d == "over":
+                over_price = p.get("price")
+            elif d == "under":
+                under_price = p.get("price")
         if over_price is None or under_price is None:
             continue
         return r, over_price, under_price

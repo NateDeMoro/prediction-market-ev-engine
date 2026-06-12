@@ -511,11 +511,17 @@ def _find_pin_prices(pin_rows, record):
             if line is not None and abs((r.get("line") or 0) - line) >= 1e-9:
                 continue
             prices = r.get("prices") or []
-            if len(prices) != 2:
-                continue
-            yes_price = prices[0].get("price")  # Over
-            opp_price = prices[1].get("price")  # Under
-            if yes_price is not None and opp_price is not None:
+            over_price = None
+            under_price = None
+            for p in prices:
+                d = p.get("designation")
+                if d == "over":
+                    over_price = p.get("price")
+                elif d == "under":
+                    under_price = p.get("price")
+            if over_price is not None and under_price is not None:
+                yes_price = over_price if yes_d == "over" else under_price
+                opp_price = under_price if yes_d == "over" else over_price
                 return yes_price, opp_price
             continue
 
