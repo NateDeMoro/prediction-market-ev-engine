@@ -179,6 +179,28 @@ def read_latest_snapshot_meta(dir_path):
         return None
 
 
+def snapshot_age_seconds(jsonl_path):
+    """Age in seconds of a snapshot, from its sidecar `captured_at` when present,
+    else the file mtime. Use when: judging snapshot freshness — capture time is
+    recorded explicitly by the poller and survives file copies / clock skew that
+    make mtime unreliable (see prune_snapshots). Falls back to mtime if the sidecar
+    is missing, lacks `captured_at`, or holds an unparseable value."""
+    meta_path = jsonl_path[:-len(".jsonl")] + ".meta.json"
+    captured_at = None
+    try:
+        with open(meta_path) as f:
+            captured_at = json.load(f).get("captured_at")
+    except (OSError, json.JSONDecodeError):
+        captured_at = None
+    if captured_at:
+        try:
+            dt = datetime.fromisoformat(captured_at)
+            return (datetime.now(timezone.utc) - dt).total_seconds()
+        except (ValueError, TypeError):
+            pass
+    return time.time() - os.path.getmtime(jsonl_path)
+
+
 def stale_snapshot_reason(pin_age, book_ages, pin_max_age, soft_max_age,
                           missing_soft_is_stale=False):
     """Return a human reason string if any snapshot is too old, else None.

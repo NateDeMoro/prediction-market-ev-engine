@@ -174,14 +174,14 @@ def _replay_state():
         if key and key in _closes_by_key and s.get("fair_prob_close") is None:
             close = _closes_by_key[key]
             s["fair_prob_close"] = close.get("fair_prob_close")
-        # Recompute expected_profit using the closing fair prob when available.
-        # Settlements predating CLV capture keep their placement-time EV; edge_pct
-        # stays frozen at the placement value regardless.
-        fpc = s.get("fair_prob_close")
-        if isinstance(fpc, (int, float)):
-            recomputed = _expected_profit_at(s, fpc)
-            if recomputed is not None:
-                s["expected_profit"] = recomputed
+        # expected_profit is the placement-basis EV (net_ev). Settlements written
+        # by older code overwrote it to close-basis; restore the placement value
+        # from the placement record so the basis is consistent. The close-basis
+        # EV is recomputed on the fly in snapshot() as net_ev_close.
+        if key and key in placements_by_key:
+            pe = placements_by_key[key].get("expected_profit")
+            if pe is not None:
+                s["expected_profit"] = pe
         _settled_records.append(s)
         if key:
             _open_positions.pop(key, None)
@@ -576,9 +576,90 @@ def _find_pin_prices(pin_rows, record):
     return None
 
 
-def _capture_close_for(record, pin_rows, now):
+class CloseCaptureCtx:
+    """Per-tracker state for the shared close-capture routine, so paper and real
+    run one implementation over their own positions / closes / lock without
+    drifting. `closes_path_attr` is the config attribute name, read at call time
+    so tests can monkeypatch the path. `label` prefixes log lines."""
+
+    __slots__ = ("lock", "open_positions", "closes_by_key", "closes_path_attr",
+                 "label", "pin_stale_logged", "interp_dropped_keys")
+
+    def __init__(self, lock, open_positions, closes_by_key, closes_path_attr, label):
+        self.lock = lock
+        self.open_positions = open_positions
+        self.closes_by_key = closes_by_key
+        self.closes_path_attr = closes_path_attr
+        self.label = label
+        self.pin_stale_logged = False
+        self.interp_dropped_keys = set()
+
+
+# paper's own context; real_tracker builds its own and calls the same routine.
+_PAPER_CTX = CloseCaptureCtx(_lock, _open_positions, _closes_by_key,
+                             "PAPER_CLOSES_PATH", "paper_tracker")
+
+
+def _note_close_drop(ctx, record):
+    """Record (once per position) that a total close couldn't be captured — the
+    exact line is gone and no bracketing alternate within the cap exists. Logged
+    so a silent coverage loss is visible; the set is the countable surface."""
+    key = _record_key(record)
+    if key and key not in ctx.interp_dropped_keys:
+        ctx.interp_dropped_keys.add(key)
+        print(f"[{ctx.label}] close-capture: no usable Pinnacle total line for "
+              f"{record.get('book')}:{record.get('market_id')} "
+              f"(line {record.get('line')} outside offered range)")
+
+
+def _interpolate_total_fair(pin_rows, record):
+    """Interpolate a total's closing fair (in the record's yes-designation
+    perspective) from the two pregame alternate lines bracketing the placement
+    line, used when the exact line is absent. Returns the fair, or None when there
+    is no bracket, the bracket is wider than CLOSE_CAPTURE_INTERP_MAX_POINTS, or the
+    line is out of range — never extrapolates. Each line is devigged *before*
+    interpolating (interpolating raw vigged prices is biased)."""
+    matchup_id = record.get("pin_matchup_id")
+    period = PIN_PERIOD_LABEL_TO_INT.get(record.get("period_label"))
+    yes_d = record.get("yes_designation")
+    line = record.get("line")
+    if matchup_id is None or period is None or line is None:
+        return None
+
+    fair_by_line = {}
+    for r in pin_rows:
+        if r.get("isLive"):
+            continue
+        if (r.get("matchupId") != matchup_id or r.get("type") != "total"
+                or r.get("period") != period):
+            continue
+        over_px = under_px = pts = None
+        for p in (r.get("prices") or []):
+            d = p.get("designation")
+            if d == "over":
+                over_px, pts = p.get("price"), p.get("points")
+            elif d == "under":
+                under_px, pts = p.get("price"), p.get("points")
+        if over_px is None or under_px is None or pts is None:
+            continue
+        yes_px = over_px if yes_d == "over" else under_px
+        opp_px = under_px if yes_d == "over" else over_px
+        devigged = devig_multiplicative([yes_px, opp_px])
+        if devigged is not None:
+            fair_by_line[pts] = devigged[0]
+
+    lo = max((L for L in fair_by_line if L < line), default=None)
+    hi = min((L for L in fair_by_line if L > line), default=None)
+    if lo is None or hi is None or (hi - lo) > config.CLOSE_CAPTURE_INTERP_MAX_POINTS:
+        return None
+    f_lo, f_hi = fair_by_line[lo], fair_by_line[hi]
+    return f_lo + (line - lo) / (hi - lo) * (f_hi - f_lo)
+
+
+def capture_close_for(ctx, record, pin_rows, now):
     """Attempt to capture closing Pinnacle fair prob for this open position.
-    Appends to paper_closes.jsonl and populates _closes_by_key on success.
+    Appends to ctx's closes JSONL and populates ctx.closes_by_key on success.
+    Shared by paper and real trackers via their respective CloseCaptureCtx.
 
     Team/non-prop markets are last-write-wins until the matchup goes live: each
     pregame capture overwrites the previous, so the recorded close is the last
@@ -605,16 +686,27 @@ def _capture_close_for(record, pin_rows, now):
         return None
 
     found = _find_pin_prices(pin_rows, record)
-    if not found:
+    was_interpolated = False
+    if found:
+        yes_px, opp_px = found
+        try:
+            devigged = devig_multiplicative([yes_px, opp_px])
+        except (ValueError, ZeroDivisionError):
+            return None
+        if devigged is None:
+            return None
+        yes_fair, _ = devigged
+    elif record.get("market_type") == "total":
+        # Exact line gone: interpolate from bracketing alternates (#22). Drop
+        # (and count) when no usable bracket exists rather than extrapolating.
+        yes_fair = _interpolate_total_fair(pin_rows, record)
+        if yes_fair is None:
+            _note_close_drop(ctx, record)
+            return None
+        yes_px = opp_px = None
+        was_interpolated = True
+    else:
         return None
-    yes_px, opp_px = found
-    try:
-        devigged = devig_multiplicative([yes_px, opp_px])
-    except (ValueError, ZeroDivisionError):
-        return None
-    if devigged is None:
-        return None
-    yes_fair, _ = devigged
 
     # Store fair_prob_close in the record's side-perspective so downstream
     # CLV / fair-delta math reads directly, without branching on side.
@@ -633,52 +725,54 @@ def _capture_close_for(record, pin_rows, now):
         "fair_prob_close": round(fair_close_side, 6),
         "yes_side_price_close": yes_px,
         "opposite_side_price_close": opp_px,
+        "was_interpolated": was_interpolated,
         "minutes_before_start": round(dt_to_start / 60.0, 2),
     }
-    with _lock:
+    with ctx.lock:
         # Last-write-wins for both props and teams, throttled to actual moves:
         # only append when fair_prob_close changes. Replay is last-write-wins on
         # the JSONL, so this cuts write noise without affecting the captured
         # value. Teams are not locked here — the lock comes from _find_pin_prices
         # returning None once the matchup is live, so this block is unreachable
         # for a team after kickoff.
-        existing = _closes_by_key.get(key)
+        existing = ctx.closes_by_key.get(key)
         if existing is not None and existing.get("fair_prob_close") == close["fair_prob_close"]:
             return None
-        _append_jsonl(config.PAPER_CLOSES_PATH, close)
-        _closes_by_key[key] = close
+        _append_jsonl(getattr(config, ctx.closes_path_attr), close)
+        ctx.closes_by_key[key] = close
     return close
 
 
-_pin_stale_logged = False
+def _capture_close_for(record, pin_rows, now):
+    """Paper-bound wrapper (preserves the existing call surface)."""
+    return capture_close_for(_PAPER_CTX, record, pin_rows, now)
 
 
-def _log_pin_stale(age):
+def _log_pin_stale(ctx, age):
     """Log once when close-capture starts skipping due to a stale/missing
     Pinnacle snapshot; reset by _note_pin_fresh so a dead poller doesn't spam
     one line per 30s tick."""
-    global _pin_stale_logged
-    if not _pin_stale_logged:
+    if not ctx.pin_stale_logged:
         shown = "MISSING" if age is None else f"{age:.0f}s"
-        print(f"[paper_tracker] close-capture skipped: pinnacle snapshot stale "
+        print(f"[{ctx.label}] close-capture skipped: pinnacle snapshot stale "
               f"({shown} > {config.CLOSE_CAPTURE_MAX_PIN_AGE_SEC}s)")
-        _pin_stale_logged = True
+        ctx.pin_stale_logged = True
 
 
-def _note_pin_fresh():
-    global _pin_stale_logged
-    _pin_stale_logged = False
+def _note_pin_fresh(ctx):
+    ctx.pin_stale_logged = False
 
 
-def capture_closes_once():
+def run_close_capture(ctx):
     """Check each open position once; capture closing fair-prob if within window.
+    Shared by paper and real trackers (each passes its own CloseCaptureCtx).
 
     All open positions are re-checked every tick: props keep updating their
     last-seen fair prob until Pinnacle drops the line, and teams keep updating
     (last-write-wins) until the matchup goes live and the value locks. Skips the
     whole tick when the latest Pinnacle snapshot is stale (poller down)."""
-    with _lock:
-        pending = list(_open_positions.values())
+    with ctx.lock:
+        pending = list(ctx.open_positions.values())
     if not pending:
         return
     # Drop any whose startTime is already outside the capture window, so we
@@ -704,14 +798,19 @@ def capture_closes_once():
     if pin_rows is None:
         return
     if pin_age is None or pin_age > config.CLOSE_CAPTURE_MAX_PIN_AGE_SEC:
-        _log_pin_stale(pin_age)
+        _log_pin_stale(ctx, pin_age)
         return
-    _note_pin_fresh()
+    _note_pin_fresh(ctx)
     for r in relevant:
         try:
-            _capture_close_for(r, pin_rows, now)
+            capture_close_for(ctx, r, pin_rows, now)
         except Exception:
             traceback.print_exc()
+
+
+def capture_closes_once():
+    """Paper-bound wrapper (preserves the existing call surface)."""
+    run_close_capture(_PAPER_CTX)
 
 
 def _close_capture_loop():
@@ -804,10 +903,8 @@ def _settle_one(record):
             settlement["fair_prob_close"] = fpc
             if isinstance(avg_fill, (int, float)) and isinstance(fpc, (int, float)):
                 settlement["clv"] = round(fpc - avg_fill, 6)
-            if isinstance(fpc, (int, float)):
-                recomputed = _expected_profit_at(settlement, fpc)
-                if recomputed is not None:
-                    settlement["expected_profit"] = recomputed
+            # expected_profit stays placement-basis (net_ev); close-basis EV is
+            # computed on the fly in snapshot() as net_ev_close.
         _append_jsonl(config.PAPER_SETTLEMENTS_PATH, settlement)
         _settled_records.append(settlement)
 
@@ -856,13 +953,20 @@ def snapshot():
     settled_pnl = sum(s.get("net_pnl", 0.0) for s in settled)
     roi_pct = (settled_pnl / settled_stake * 100) if settled_stake > 0 else 0.0
     hit_rate = (wins / total_settled * 100) if total_settled else 0.0
-    # Modeled expected profit, credited only when a bet settles. Voids
-    # never contribute, so voiding an open bet zeros out its EV.
-    net_ev = round(
-        sum(s.get("expected_profit", 0.0) or 0.0
-            for s in settled if s.get("result") != "void"),
-        4,
-    )
+    # Two EV bases on one consistent footing. net_ev = placement basis: the edge
+    # modeled at bet time (calibration vs realized PnL). net_ev_close = close
+    # basis: the edge measured against Pinnacle's closing fair, summed only over
+    # bets that have a close (sample-gated, like avg_clv). Voids contribute to
+    # neither.
+    settled_live = [s for s in settled if s.get("result") != "void"]
+    net_ev = round(sum(s.get("expected_profit", 0.0) or 0.0 for s in settled_live), 4)
+    close_ev_vals = [
+        _expected_profit_at(s, s["fair_prob_close"])
+        for s in settled_live if isinstance(s.get("fair_prob_close"), (int, float))
+    ]
+    close_ev_vals = [v for v in close_ev_vals if v is not None]
+    net_ev_close = round(sum(close_ev_vals), 4)
+    net_ev_close_samples = len(close_ev_vals)
 
     clv_vals = [s["clv"] for s in settled if isinstance(s.get("clv"), (int, float))]
     avg_clv = round(sum(clv_vals) / len(clv_vals), 6) if clv_vals else None
@@ -891,6 +995,8 @@ def snapshot():
             "hit_rate_pct": round(hit_rate, 2),
             "total_pnl": total_pnl,
             "net_ev": net_ev,
+            "net_ev_close": net_ev_close,
+            "net_ev_close_samples": net_ev_close_samples,
             "roi_pct": round(roi_pct, 2),
             "avg_clv": avg_clv,
             "clv_samples": clv_samples,

@@ -197,3 +197,57 @@ def test_evaluate_avg_fill_used_for_floor_not_best_ask():
     result = evaluate(ladder, 0.56, ZERO_FEE, BOOK, NON_PROP)
     assert result is not None
     assert abs(result["avg_fill"] - result["stake"] / result["shares"]) < 1e-9
+
+
+# ---------------------------------------------------------------------------
+# Group 6 — Ceiling logging (#11)
+# Over-ceiling rejections must stop being silent; near-ceiling passes log a
+# distinct line; ordinary rejections (floor/empty/zero-share) log nothing.
+# ---------------------------------------------------------------------------
+
+def test_over_ceiling_reject_logs(capsys):
+    # fair=0.90, price=0.10, zero fee → ev_pct=800% >> 15% ceiling → rejected + logged.
+    result = evaluate(_ladder(0.10, 100), 0.90, ZERO_FEE, BOOK, NON_PROP)
+    assert result is None
+    out = capsys.readouterr().out
+    assert "over-ceiling" in out
+    assert BOOK in out
+    assert NON_PROP in out
+
+
+def test_over_ceiling_log_uses_prop_ceiling_for_props(capsys):
+    # A prop between the non-prop ceiling (15%) and prop ceiling (25%) is accepted,
+    # with no over-ceiling line. fair=0.59, price=0.50 → ev_pct=18%.
+    accepted = evaluate(_ladder(0.50, 100), 0.59, ZERO_FEE, BOOK, PROP)
+    assert accepted is not None
+    assert "over-ceiling" not in capsys.readouterr().out
+    # A prop above 25% is rejected and the log names the prop ceiling (25).
+    rejected = evaluate(_ladder(0.50, 100), 0.70, ZERO_FEE, BOOK, PROP)
+    assert rejected is None
+    out = capsys.readouterr().out
+    assert "over-ceiling" in out
+    assert "25" in out
+
+
+def test_near_ceiling_pass_logs_distinctly(capsys):
+    # ev_pct=14% (fair=0.57, price=0.50): accepted, inside the 0.8x band [12%,15%).
+    accepted = evaluate(_ladder(0.50, 100), 0.57, ZERO_FEE, BOOK, NON_PROP)
+    assert accepted is not None
+    out = capsys.readouterr().out
+    assert "near-ceiling" in out
+    assert "over-ceiling" not in out
+
+
+def test_far_from_ceiling_pass_logs_nothing(capsys):
+    # ev_pct=10% (fair=0.55, price=0.50): accepted, well below the band → no ceiling log.
+    accepted = evaluate(_ladder(0.50, 100), 0.55, ZERO_FEE, BOOK, NON_PROP)
+    assert accepted is not None
+    assert "ceiling" not in capsys.readouterr().out
+
+
+def test_ordinary_rejects_log_no_ceiling(capsys):
+    # Empty, no-positive-levels, and below-floor rejects must not emit a ceiling line.
+    assert evaluate([], 0.60, ZERO_FEE, BOOK, NON_PROP) is None
+    assert evaluate(_ladder(0.70, 100), 0.20, ZERO_FEE, BOOK, NON_PROP) is None
+    assert evaluate(_ladder(0.50, 100), 0.52, ZERO_FEE, BOOK, NON_PROP) is None  # 4% < 4.5% floor
+    assert "ceiling" not in capsys.readouterr().out

@@ -53,6 +53,7 @@ _state = {
     "last_updated": None,
     "pin_age": None,
     "book_ages": {},
+    "cross_book_skew_sec": None,
     "stats": {},
     "rows": [],
     "prop_rows": [],
@@ -214,9 +215,17 @@ def scan_once():
 
     prop_rows = [r for r in rows if r["market_type"] == "player_prop"][:5]
 
+    # Cross-book capture skew: how far apart in wall-clock the Pinnacle snapshot
+    # and the furthest soft snapshot were captured. age = now - captured_at for
+    # both, so the skew is just |book_age - pin_age|. Surfaced, not gated — the
+    # soft ladder is re-fetched live at decision time.
+    soft_skews = [abs(a - pin_age) for a in book_ages.values() if a is not None]
+    cross_book_skew_sec = max(soft_skews) if soft_skews else None
+
     return {
         "pin_age": pin_age,
         "book_ages": book_ages,
+        "cross_book_skew_sec": cross_book_skew_sec,
         "stats": stats,
         "rows": rows[:TOP_N],
         "prop_rows": prop_rows,
@@ -231,6 +240,7 @@ def scanner_loop():
                 _state["last_updated"] = datetime.now(timezone.utc).isoformat()
                 _state["pin_age"] = result["pin_age"]
                 _state["book_ages"] = result["book_ages"]
+                _state["cross_book_skew_sec"] = result["cross_book_skew_sec"]
                 _state["stats"] = result["stats"]
                 _state["rows"] = result["rows"]
                 _state["prop_rows"] = result["prop_rows"]
@@ -383,10 +393,13 @@ function render(data) {
   const bookAges = data.book_ages || {};
   const bookAgeStr = Object.keys(bookAges).sort().map(b =>
       b + ' ' + (bookAges[b] != null ? bookAges[b].toFixed(0) + 's' : '?')).join(' · ');
+  const skew = (typeof data.cross_book_skew_sec === 'number')
+      ? '  ·  skew ' + data.cross_book_skew_sec.toFixed(0) + 's' : '';
   meta.textContent =
       'updated ' + updated +
       '  ·  pinnacle ' + (data.pin_age ? data.pin_age.toFixed(0) : '?') + 's' +
       (bookAgeStr ? '  ·  ' + bookAgeStr : '') +
+      skew +
       '  ·  in-scope ' + (s.soft_in_scope || 0) +
       '  ·  matched ' + (s.matched || 0) +
       ' (ML ' + (s.matched_moneyline || 0) +
@@ -647,6 +660,7 @@ function render(data) {
   const s = data.summary || {};
   const pnlClass = (s.total_pnl || 0) >= 0 ? 'pos' : 'neg';
   const evClass = (s.net_ev || 0) >= 0 ? 'pos' : 'neg';
+  const evCloseClass = (s.net_ev_close || 0) >= 0 ? 'pos' : 'neg';
   let clvTile = '<div class="stat"><div class="lbl">Avg CLV</div><div class="val">—</div></div>';
   if (typeof s.avg_clv === 'number') {
     const bps = s.avg_clv * 100;
@@ -670,7 +684,8 @@ function render(data) {
   document.getElementById('stats').innerHTML =
       '<div class="stat"><div class="lbl">Bankroll</div><div class="val">' + money(data.bankroll) + '</div></div>' +
       '<div class="stat"><div class="lbl">Net P&L</div><div class="val ' + pnlClass + '">' + money(s.total_pnl || 0) + '</div></div>' +
-      '<div class="stat"><div class="lbl">Net EV</div><div class="val ' + evClass + '">' + money(s.net_ev || 0) + '</div></div>' +
+      '<div class="stat"><div class="lbl">Net EV (placement)</div><div class="val ' + evClass + '">' + money(s.net_ev || 0) + '</div></div>' +
+      '<div class="stat"><div class="lbl">Net EV (close)</div><div class="val ' + evCloseClass + '">' + money(s.net_ev_close || 0) + '</div><div class="muted" style="font-size:11px;">' + (s.net_ev_close_samples || 0) + ' samples</div></div>' +
       clvTile +
       fairDeltaTile +
       '<div class="stat"><div class="lbl">ROI</div><div class="val">' + (s.roi_pct || 0).toFixed(2) + '%</div></div>' +
@@ -922,6 +937,8 @@ function render(data) {
   }
 
   const pnlClass = (s.total_pnl || 0) >= 0 ? 'pos' : 'neg';
+  const evClass = (s.net_ev || 0) >= 0 ? 'pos' : 'neg';
+  const evCloseClass = (s.net_ev_close || 0) >= 0 ? 'pos' : 'neg';
   let fdTile = '<div class="stat"><div class="lbl">Fair Δ</div><div class="val">—</div></div>';
   if (typeof s.avg_fair_delta === 'number') {
     const bps = s.avg_fair_delta * 100;
@@ -943,6 +960,8 @@ function render(data) {
       '<div class="stat"><div class="lbl">Kalshi</div><div class="val">' + money(data.kalshi_balance) + '</div></div>' +
       '<div class="stat"><div class="lbl">Polymarket</div><div class="val">' + money(data.polymarket_balance) + '</div></div>' +
       '<div class="stat"><div class="lbl">Net P&L</div><div class="val ' + pnlClass + '">' + money(s.total_pnl || 0) + '</div></div>' +
+      '<div class="stat"><div class="lbl">Net EV (placement)</div><div class="val ' + evClass + '">' + money(s.net_ev || 0) + '</div></div>' +
+      '<div class="stat"><div class="lbl">Net EV (close)</div><div class="val ' + evCloseClass + '">' + money(s.net_ev_close || 0) + '</div><div class="muted" style="font-size:11px;">' + (s.net_ev_close_samples || 0) + ' samples</div></div>' +
       '<div class="stat"><div class="lbl">ROI</div><div class="val">' + (s.roi_pct || 0).toFixed(2) + '%</div></div>' +
       clvTile + fdTile +
       '<div class="stat"><div class="lbl">Placed</div><div class="val">' + (s.total_placed || 0) +

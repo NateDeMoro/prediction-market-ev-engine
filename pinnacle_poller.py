@@ -518,6 +518,11 @@ def run_cycle(prev_fps):
     write_sec = 0.0
     if snapshot:
         write_now = datetime.now(timezone.utc)
+        captured_at = write_now.isoformat()
+        # Stamp capture time on freshly-fetched rows; setdefault preserves the
+        # stamp on any rows carried forward from a prior cycle (tiered cadence).
+        for row in snapshot:
+            row.setdefault("captured_at", captured_at)
         snap_path = os.path.join(
             SNAPSHOT_DIR, write_now.strftime("%Y%m%dT%H%M%SZ") + ".jsonl"
         )
@@ -528,6 +533,7 @@ def run_cycle(prev_fps):
         write_sec = time.monotonic() - write_start
         cycle_elapsed_sec = time.monotonic() - cycle_start
         write_snapshot_meta(snap_path, {
+            "captured_at": captured_at,
             "cycle_elapsed_sec": cycle_elapsed_sec,
             "phase_a_sec": phase_a_sec,
             "phase_b_sec": phase_b_sec,
