@@ -484,6 +484,9 @@ def maybe_place(row, ladder, now=None):
         "opposite_designation": row.get("opposite_designation"),
         "fair_prob": fair_prob,
         "fair_prob_raw": row.get("fair_prob_raw"),
+        # #6b: provenance of the fair this bet was placed on (mirrors paper).
+        "fair_refreshed": row.get("fair_refreshed"),
+        "pin_refetch_delta": row.get("pin_refetch_delta"),
         "avg_fill_price": sized["avg_fill_price"],
         "shares": sized["shares"],
         "stake": sized["stake"],
