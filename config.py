@@ -338,6 +338,12 @@ SETTLEMENT_POLL_SEC     = 30 * 60   # shared by paper and real trackers
 CLOSE_CAPTURE_POLL_SEC  = 30
 CLOSE_CAPTURE_LEAD_SEC  = 60        # start capture this far before startTime
 CLOSE_CAPTURE_TRAIL_SEC = 15 * 60   # stop capture this far after startTime
+# Skip recording a close when the latest Pinnacle snapshot is older than this.
+# The risk being caught is a dead/stalled poller (which shows minutes of age),
+# not the 45s line-drift limit the scan path uses — so this is deliberately
+# looser, and never false-rejects a legitimate late capture when a Pinnacle
+# cycle runs long.
+CLOSE_CAPTURE_MAX_PIN_AGE_SEC = 120
 ORDER_POLL_SEC          = 5
 BALANCE_LOG_POLL_SEC    = 5 * 60
 
