@@ -270,6 +270,11 @@ def run_cycle(prev_fps, core_series, dead_counts, cycle_num):
     write_sec = 0.0
     if snapshot:
         write_now = datetime.now(timezone.utc)
+        captured_at = write_now.isoformat()
+        # Stamp capture time on freshly-fetched rows; setdefault preserves the
+        # stamp on any rows carried forward from a prior cycle (tiered cadence).
+        for row in snapshot:
+            row.setdefault("captured_at", captured_at)
         path = os.path.join(SNAPSHOT_DIR, write_now.strftime("%Y%m%dT%H%M%SZ") + ".jsonl")
         write_start = time.monotonic()
         atomic_write_jsonl(
@@ -278,6 +283,7 @@ def run_cycle(prev_fps, core_series, dead_counts, cycle_num):
         write_sec = time.monotonic() - write_start
         cycle_elapsed_sec = time.monotonic() - cycle_start
         write_snapshot_meta(path, {
+            "captured_at": captured_at,
             "cycle_elapsed_sec": cycle_elapsed_sec,
             "fetch_sec": fetch_sec,
             "write_sec": write_sec,

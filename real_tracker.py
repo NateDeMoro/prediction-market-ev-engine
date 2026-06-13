@@ -856,81 +856,17 @@ def start_settlement_thread():
 
 
 # ---------------------------------------------------------------------------
-# Close-line capture — reuse paper_tracker._capture_close_for over our state
+# Close-line capture — one shared routine with paper_tracker (no drift). real
+# supplies its own state via CloseCaptureCtx; the gate (#20), go-live lock (#21)
+# and moved-line interpolation (#22) all come from paper_tracker.run_close_capture.
 # ---------------------------------------------------------------------------
 
+_REAL_CTX = pt.CloseCaptureCtx(_lock, _open_positions, _closes_by_key,
+                               "REAL_CLOSES_PATH", "real_tracker")
+
+
 def _capture_closes_once():
-    with _lock:
-        pending = list(_open_positions.values())
-    if not pending:
-        return
-    now = datetime.now(timezone.utc)
-    relevant = []
-    for r in pending:
-        start = pt._parse_iso(r.get("pin_start_time"))
-        if start is None:
-            continue
-        dt = (start - now).total_seconds()
-        if dt < -config.CLOSE_CAPTURE_TRAIL_SEC:
-            continue
-        is_prop = r.get("market_type") == "player_prop"
-        if not is_prop and dt > config.CLOSE_CAPTURE_LEAD_SEC:
-            continue
-        relevant.append(r)
-    if not relevant:
-        return
-    pin_rows = pt._load_latest_pin_snapshot()
-    if pin_rows is None:
-        return
-    for r in relevant:
-        try:
-            # paper_tracker._capture_close_for writes to its own paths/state.
-            # We re-implement minimally here against our CLOSES_PATH.
-            _capture_close_for(r, pin_rows, now)
-        except Exception:
-            traceback.print_exc()
-
-
-def _capture_close_for(record, pin_rows, now):
-    book = record.get("book") or "kalshi"
-    market_id = record.get("market_id")
-    if not market_id:
-        return None
-    side = record.get("side") or "yes"
-    key = _key(book, market_id, side)
-    is_prop = record.get("market_type") == "player_prop"
-    if key in _closes_by_key and not is_prop:
-        return None
-    found = pt._find_pin_prices(pin_rows, record)
-    if not found:
-        return None
-    yes_px, opp_px = found
-    try:
-        devigged = pt.devig_multiplicative([yes_px, opp_px])
-    except (ValueError, ZeroDivisionError):
-        return None
-    if devigged is None:
-        return None
-    yes_fair, _ = devigged
-    fair_close_side = yes_fair if side == "yes" else round(1.0 - yes_fair, 6)
-    close = {
-        "captured_at": now.isoformat(),
-        "book": book,
-        "market_id": market_id,
-        "side": side,
-        "pin_matchup": record.get("pin_matchup"),
-        "pin_start_time": record.get("pin_start_time"),
-        "market_type": record.get("market_type"),
-        "period_label": record.get("period_label"),
-        "line": record.get("line"),
-        "fair_prob_close": round(fair_close_side, 6),
-        "yes_side_price_close": yes_px,
-        "opposite_side_price_close": opp_px,
-    }
-    with _lock:
-        pt._append_jsonl(config.REAL_CLOSES_PATH, close)
-        _closes_by_key[key] = close
-    return close
+    pt.run_close_capture(_REAL_CTX)
 
 
 def _close_capture_loop():
@@ -1119,6 +1055,16 @@ def snapshot():
     # but are not yet wins or losses.
     total_pnl = round(settled_pnl, 4)
 
+    # Two EV bases, mirroring paper_tracker.snapshot(): net_ev = placement basis,
+    # net_ev_close = close basis (sample-gated). Voids contribute to neither.
+    settled_live = [s for s in settled if s.get("result") != "void"]
+    net_ev = round(sum(s.get("expected_profit", 0.0) or 0.0 for s in settled_live), 4)
+    close_ev_vals = [pt._expected_profit_at(s, s["fair_prob_close"])
+                     for s in settled_live if isinstance(s.get("fair_prob_close"), (int, float))]
+    close_ev_vals = [v for v in close_ev_vals if v is not None]
+    net_ev_close = round(sum(close_ev_vals), 4)
+    net_ev_close_samples = len(close_ev_vals)
+
     clv_vals = [s["clv"] for s in settled if isinstance(s.get("clv"), (int, float))]
     avg_clv = round(sum(clv_vals) / len(clv_vals), 6) if clv_vals else None
 
@@ -1158,6 +1104,9 @@ def snapshot():
             "losses": losses,
             "hit_rate_pct": round(hit_rate, 2),
             "total_pnl": total_pnl,
+            "net_ev": net_ev,
+            "net_ev_close": net_ev_close,
+            "net_ev_close_samples": net_ev_close_samples,
             "roi_pct": round(roi_pct, 2),
             "avg_clv": avg_clv,
             "avg_fair_delta": avg_fair_delta,

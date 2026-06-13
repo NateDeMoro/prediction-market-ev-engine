@@ -169,6 +169,11 @@ def snapshot_once():
 
     os.makedirs(SNAPSHOT_DIR, exist_ok=True)
     write_now = datetime.now(timezone.utc)
+    captured_at = write_now.isoformat()
+    # Stamp capture time on freshly-fetched rows; setdefault preserves the stamp
+    # on any rows carried forward from a prior cycle (tiered cadence).
+    for row in rows:
+        row.setdefault("captured_at", captured_at)
     fname = write_now.strftime("%Y%m%dT%H%M%SZ") + ".jsonl"
     path = os.path.join(SNAPSHOT_DIR, fname)
     fetch_sec = time.time() - start
@@ -180,6 +185,7 @@ def snapshot_once():
     dt = time.time() - start
     rate_limit_429 = _gate.reset_and_get_429()
     write_snapshot_meta(path, {
+        "captured_at": captured_at,
         "cycle_elapsed_sec": dt,
         "fetch_sec": fetch_sec,
         "write_sec": write_sec,

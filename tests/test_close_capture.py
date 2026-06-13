@@ -26,8 +26,9 @@ def reset_module_state():
     saved_closes = dict(pt._closes_by_key)
     pt._open_positions.clear()
     pt._closes_by_key.clear()
-    if hasattr(pt, "_pin_stale_logged"):
-        pt._pin_stale_logged = False
+    if hasattr(pt, "_PAPER_CTX"):
+        pt._PAPER_CTX.pin_stale_logged = False
+        pt._PAPER_CTX.interp_dropped_keys.clear()
     yield
     pt._open_positions.clear()
     pt._open_positions.update(saved_open)
@@ -188,3 +189,154 @@ def test_capture_closes_once_rechecks_team_with_existing_close(write_pin_snapsho
     expected = round(devig_multiplicative([120, -140])[0], 6)
     assert pt._closes_by_key[key]["fair_prob_close"] == expected   # re-checked & updated
     assert len(read_closes(closes_path)) == 1
+
+
+# ===========================================================================
+# #22 — moved-line interpolation (totals)
+# ===========================================================================
+
+def _interp(f_lo, f_hi, lo, hi, line):
+    return f_lo + (line - lo) / (hi - lo) * (f_hi - f_lo)
+
+
+def test_interpolate_total_fair_brackets():
+    rec = placement(market_type="total", line=45.5, yes_designation="over",
+                    opposite_designation="under")
+    rows = [pin_total_row(line=45.0, over=-110, under=-110),
+            pin_total_row(line=46.0, over=120, under=-130)]
+    f_lo = devig_multiplicative([-110, -110])[0]
+    f_hi = devig_multiplicative([120, -130])[0]
+    expected = _interp(f_lo, f_hi, 45.0, 46.0, 45.5)
+    assert pt._interpolate_total_fair(rows, rec) == pytest.approx(expected)
+
+
+def test_interpolate_devigs_before_interpolating():
+    # With vig present, interpolating devigged fairs differs from interpolating
+    # raw implied probs (1/decimal, un-normalized). Result must match the former.
+    rec = placement(market_type="total", line=45.5, yes_designation="over",
+                    opposite_designation="under")
+    rows = [pin_total_row(line=45.0, over=-120, under=-110),
+            pin_total_row(line=46.0, over=110, under=-150)]
+    devig_interp = _interp(devig_multiplicative([-120, -110])[0],
+                           devig_multiplicative([110, -150])[0], 45.0, 46.0, 45.5)
+    from devig_utils import american_to_decimal
+    raw_interp = _interp(1 / american_to_decimal(-120), 1 / american_to_decimal(110),
+                         45.0, 46.0, 45.5)
+    got = pt._interpolate_total_fair(rows, rec)
+    assert got == pytest.approx(devig_interp)
+    assert got != pytest.approx(raw_interp)
+
+
+def test_interpolate_respects_distance_cap():
+    rec = placement(market_type="total", line=45.5)
+    rows = [pin_total_row(line=44.0, over=-110, under=-110),
+            pin_total_row(line=47.0, over=-110, under=-110)]  # gap 3.0 > cap
+    assert pt._interpolate_total_fair(rows, rec) is None
+
+
+def test_interpolate_no_extrapolation():
+    rec = placement(market_type="total", line=46.5)  # above all offered
+    rows = [pin_total_row(line=44.0, over=-110, under=-110),
+            pin_total_row(line=45.0, over=-110, under=-110)]
+    assert pt._interpolate_total_fair(rows, rec) is None
+
+
+def test_interpolate_skips_live_neighbors():
+    rec = placement(market_type="total", line=45.5)
+    rows = [pin_total_row(line=45.0, over=-110, under=-110, is_live=False),
+            pin_total_row(line=46.0, over=-110, under=-110, is_live=True)]  # live hi
+    assert pt._interpolate_total_fair(rows, rec) is None  # no pregame upper bracket
+
+
+def test_capture_prefers_exact_over_interpolation(closes_path):
+    rec = placement(market_type="total", line=45.5, start_in_sec=30)
+    seed_open(rec)
+    now = datetime.now(timezone.utc)
+    rows = [pin_total_row(line=45.5, over=-110, under=-110),   # exact present
+            pin_total_row(line=45.0, over=120, under=-130)]
+    pt._capture_close_for(rec, rows, now)
+    close = pt._closes_by_key[pt._record_key(rec)]
+    assert not close.get("was_interpolated")
+    assert close["yes_side_price_close"] is not None
+
+
+def test_capture_marks_interpolated_and_nulls_prices(closes_path):
+    rec = placement(market_type="total", line=45.5, start_in_sec=30)
+    seed_open(rec)
+    now = datetime.now(timezone.utc)
+    rows = [pin_total_row(line=45.0, over=-110, under=-110),
+            pin_total_row(line=46.0, over=120, under=-130)]   # no exact 45.5
+    pt._capture_close_for(rec, rows, now)
+    close = pt._closes_by_key[pt._record_key(rec)]
+    assert close["was_interpolated"] is True
+    assert close["yes_side_price_close"] is None
+    assert close["opposite_side_price_close"] is None
+
+
+def test_capture_drop_counter_increments(closes_path):
+    rec = placement(market_type="total", line=45.5, start_in_sec=30)
+    seed_open(rec)
+    now = datetime.now(timezone.utc)
+    rows = [pin_total_row(line=48.0, over=-110, under=-110),
+            pin_total_row(line=49.0, over=-110, under=-110)]  # line out of range
+    assert pt._capture_close_for(rec, rows, now) is None
+    assert read_closes(closes_path) == []
+    assert pt._record_key(rec) in pt._PAPER_CTX.interp_dropped_keys
+
+
+def test_interpolate_side_perspective():
+    # Under bet: yes_designation="under". Interpolated fair must be in the under
+    # perspective (P(under) rises with the line), matching the exact path.
+    rec = placement(market_type="total", line=45.5, yes_designation="under",
+                    opposite_designation="over")
+    rows = [pin_total_row(line=45.0, over=-110, under=-110),
+            pin_total_row(line=46.0, over=120, under=-130)]
+    f_lo = devig_multiplicative([-110, -110])[0]            # [under, over] order
+    f_hi = devig_multiplicative([-130, 120])[0]
+    expected = _interp(f_lo, f_hi, 45.0, 46.0, 45.5)
+    assert pt._interpolate_total_fair(rows, rec) == pytest.approx(expected)
+
+
+# ===========================================================================
+# #23 — shared close-capture routine across paper + real
+# ===========================================================================
+
+def _seed_real(rt, record):
+    rt._open_positions.clear()
+    rt._closes_by_key.clear()
+    rt._open_positions[pt._record_key(record)] = record
+
+
+def test_real_uses_shared_capture_with_interpolation(tmp_path, monkeypatch):
+    import real_tracker as rt
+    monkeypatch.setattr(config, "REAL_CLOSES_PATH", str(tmp_path / "real_closes.jsonl"))
+    rec = placement(market_type="total", line=45.5, start_in_sec=30)
+    _seed_real(rt, rec)
+    now = datetime.now(timezone.utc)
+    rows = [pin_total_row(line=45.0, over=-110, under=-110),
+            pin_total_row(line=46.0, over=120, under=-130)]   # interpolation case
+    pt.capture_close_for(rt._REAL_CTX, rec, rows, now)
+    close = rt._closes_by_key[pt._record_key(rec)]
+    assert close["was_interpolated"] is True   # real now has #22 via the shared routine
+    expected = _interp(devig_multiplicative([-110, -110])[0],
+                       devig_multiplicative([120, -130])[0], 45.0, 46.0, 45.5)
+    assert close["fair_prob_close"] == pytest.approx(round(expected, 6))
+
+
+def test_paper_and_real_capture_identical(tmp_path, monkeypatch):
+    import real_tracker as rt
+    monkeypatch.setattr(config, "PAPER_CLOSES_PATH", str(tmp_path / "p.jsonl"))
+    monkeypatch.setattr(config, "REAL_CLOSES_PATH", str(tmp_path / "r.jsonl"))
+    rec = placement(market_type="total", line=45.5, start_in_sec=30)
+    seed_open(rec)
+    _seed_real(rt, rec)
+    now = datetime.now(timezone.utc)
+    rows = [pin_total_row(line=45.0, over=-110, under=-110, is_live=True),    # live, skipped
+            pin_total_row(line=45.5, over=-110, under=-110, is_live=False)]   # exact pregame
+    pt.capture_close_for(pt._PAPER_CTX, rec, rows, now)
+    pt.capture_close_for(rt._REAL_CTX, rec, rows, now)
+    p = pt._PAPER_CTX.closes_by_key[pt._record_key(rec)]
+    r = rt._REAL_CTX.closes_by_key[pt._record_key(rec)]
+    assert p["fair_prob_close"] == r["fair_prob_close"]
+    assert p["was_interpolated"] == r["was_interpolated"]
+    assert rt._REAL_CTX.closes_by_key is not pt._PAPER_CTX.closes_by_key   # isolated state

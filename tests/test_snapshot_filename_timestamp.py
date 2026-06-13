@@ -168,6 +168,57 @@ def test_polymarket_filename_uses_write_time(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Group 1b — captured_at stamped on sidecar + rows (#5)
+# ---------------------------------------------------------------------------
+
+def _read_one_jsonl(tmp_path):
+    import json
+    files = list(tmp_path.glob("*.jsonl"))
+    assert len(files) == 1
+    with open(files[0]) as f:
+        return [json.loads(l) for l in f if l.strip()]
+
+
+def _read_one_meta(tmp_path):
+    import json
+    files = list(tmp_path.glob("*.meta.json"))
+    assert len(files) == 1
+    with open(files[0]) as f:
+        return json.load(f)
+
+
+def test_pinnacle_sidecar_has_captured_at(tmp_path):
+    """The .meta.json sidecar carries captured_at == write-time ISO."""
+    start = T_START + timedelta(hours=1)
+    FakeDate = _fake_datetime(T_START, T_WRITE)
+    with patch("pinnacle_poller.fetch_sports", return_value=[{"id": 1, "name": "Soccer", "matchupCount": 1}]), \
+         patch("pinnacle_poller.fetch_raw_matchups", return_value=[_pin_matchup(start)]), \
+         patch("pinnacle_poller.fetch_bulk_markets", return_value=[_pin_market()]), \
+         patch("pinnacle_poller.SNAPSHOT_DIR", str(tmp_path)), \
+         patch("pinnacle_poller.log", lambda msg: None), \
+         patch("pinnacle_poller.datetime", FakeDate):
+        pinnacle_poller.run_cycle({})
+
+    assert _read_one_meta(tmp_path).get("captured_at") == T_WRITE.isoformat()
+
+
+def test_pinnacle_rows_have_captured_at(tmp_path):
+    """Every snapshot row carries captured_at == write-time ISO (fresh fetch)."""
+    start = T_START + timedelta(hours=1)
+    FakeDate = _fake_datetime(T_START, T_WRITE)
+    with patch("pinnacle_poller.fetch_sports", return_value=[{"id": 1, "name": "Soccer", "matchupCount": 1}]), \
+         patch("pinnacle_poller.fetch_raw_matchups", return_value=[_pin_matchup(start)]), \
+         patch("pinnacle_poller.fetch_bulk_markets", return_value=[_pin_market()]), \
+         patch("pinnacle_poller.SNAPSHOT_DIR", str(tmp_path)), \
+         patch("pinnacle_poller.log", lambda msg: None), \
+         patch("pinnacle_poller.datetime", FakeDate):
+        pinnacle_poller.run_cycle({})
+
+    rows = _read_one_jsonl(tmp_path)
+    assert rows and all(r.get("captured_at") == T_WRITE.isoformat() for r in rows)
+
+
+# ---------------------------------------------------------------------------
 # Group 2 — Sort-order invariant: prune_snapshots works with write-time filenames
 # ---------------------------------------------------------------------------
 

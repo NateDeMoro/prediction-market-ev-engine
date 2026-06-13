@@ -249,6 +249,11 @@ EDGE_MARGIN_PP: dict[tuple[str, str], float] = {
 SANITY_MAX_EDGE_PCT      = float(os.getenv("SANITY_MAX_EDGE",      "15.0"))
 SANITY_MAX_EDGE_PCT_PROP = float(os.getenv("SANITY_MAX_EDGE_PROP", "25.0"))
 
+# Fraction of the ceiling above which an accepted edge is logged as "near-ceiling".
+# Over-ceiling edges (rejected as likely matcher noise) are always logged; this band
+# surfaces the ones that nearly tripped the ceiling so their frequency is observable.
+CEILING_LOG_FRAC = float(os.getenv("CEILING_LOG_FRAC", "0.8"))
+
 
 def min_edge_pct(book: str, market_type: str, avg_fill_price) -> float:
     """Minimum edge_pct required to place a bet on this book at this fill price.
@@ -344,6 +349,12 @@ CLOSE_CAPTURE_TRAIL_SEC = 15 * 60   # stop capture this far after startTime
 # looser, and never false-rejects a legitimate late capture when a Pinnacle
 # cycle runs long.
 CLOSE_CAPTURE_MAX_PIN_AGE_SEC = 120
+# When the exact placement total line is gone at close, interpolate the fair
+# value from the two bracketing alternate lines — but only if they sit within
+# this many points of each other (totals move in 0.5/1.0 steps; a tight bracket
+# keeps the linear-in-prob interpolation honest). Wider gaps / out-of-range
+# lines are dropped, not extrapolated.
+CLOSE_CAPTURE_INTERP_MAX_POINTS = 1.0
 ORDER_POLL_SEC          = 5
 BALANCE_LOG_POLL_SEC    = 5 * 60
 

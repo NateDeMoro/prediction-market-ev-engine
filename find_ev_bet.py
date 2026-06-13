@@ -21,7 +21,7 @@ import time
 from datetime import datetime, timezone, timedelta
 
 from adapters import all_adapters, adapter_for
-from data_utils import stale_snapshot_reason
+from data_utils import snapshot_age_seconds, stale_snapshot_reason
 from devig_utils import american_to_decimal, devig_multiplicative
 from market_matcher import match_all_markets, parse_iso
 import config
@@ -57,7 +57,7 @@ def load_latest_snapshot(dir_path):
     if not files:
         return None, None
     path = files[-1]
-    age = time.time() - os.path.getmtime(path)
+    age = snapshot_age_seconds(path)
     with open(path) as f:
         rows = [json.loads(l) for l in f]
     return rows, age
@@ -132,7 +132,14 @@ def evaluate(ladder, fair, fee_fn, book, market_type):
     is_prop = market_type == "player_prop"
     max_edge = config.SANITY_MAX_EDGE_PCT_PROP if is_prop else config.SANITY_MAX_EDGE_PCT
     if ev_pct > max_edge:
+        # Likely matcher noise — rejected, but no longer silent so the rate is visible.
+        print(f"[evaluate] over-ceiling reject book={book} type={market_type} "
+              f"ev={ev_pct:.2f}% ceiling={max_edge:.1f}% avg_fill={avg_fill:.3f}")
         return None
+    if ev_pct >= config.CEILING_LOG_FRAC * max_edge:
+        # Accepted, but close enough to the ceiling to be worth flagging.
+        print(f"[evaluate] near-ceiling book={book} type={market_type} "
+              f"ev={ev_pct:.2f}% ceiling={max_edge:.1f}% avg_fill={avg_fill:.3f}")
 
     return {
         "shares": shares,
