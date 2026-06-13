@@ -38,6 +38,7 @@ from data_utils import (
     write_snapshot_meta,
 )
 from devig_utils import american_to_decimal
+from pinnacle_client import market_to_row
 import config
 
 BASE = "https://guest.api.arcadia.pinnacle.com/0.1"
@@ -268,24 +269,9 @@ def record_market(market, matchup, sport_name, is_live, snapshot,
         name = f"{home} vs {away}"
         live_tag = " LIVE" if is_live else ""
         emit_log(format_price_change(market, name + live_tag, prev_fps.get(k)))
-    home, away = matchup_participants(matchup)
-    row = {
-        "sport": sport_name,
-        "matchupId": matchup.get("id"),
-        "matchup": f"{home} vs {away}",
-        "startTime": matchup.get("startTime"),
-        "isLive": bool(is_live),
-        "period": market.get("period"),
-        "type": market.get("type"),
-        "prices": market.get("prices"),
-    }
-    # team_total rows come in a pair per (matchupId, period, points) — one for
-    # home, one for away — distinguished only by the top-level `side` field
-    # (already part of market_key). Preserve it so the matcher can pair a
-    # Kalshi team-total ticker to the correct side's Pinnacle over/under.
-    if market.get("type") == "team_total":
-        row["side"] = market.get("side")
-    snapshot.append(row)
+    # Row schema is owned by pinnacle_client.market_to_row (single source of truth,
+    # shared with the #6b decision-time re-fetch in engine).
+    snapshot.append(market_to_row(market, matchup, sport_name, is_live))
     return changed
 
 

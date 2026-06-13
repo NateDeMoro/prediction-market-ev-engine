@@ -61,6 +61,14 @@ def _patch_engine(monkeypatch, candidates, adapter):
     monkeypatch.setattr(engine, "read_latest_snapshot_meta", lambda _d: None)
     monkeypatch.setattr(engine, "adapter_for", lambda book: adapter)
     monkeypatch.setattr(engine, "all_adapters", lambda: [])
+    # #6b: in-window candidates require a successful live re-fetch to be placed
+    # (fail-closed). These structural tests aren't about the re-fetch (covered by
+    # test_engine_refresh / test_live_refetch_integration), so mock it as a no-op
+    # passthrough that echoes the snapshot fair.
+    monkeypatch.setattr(engine, "_refresh_fair", lambda c, cache, smap: {
+        "yes_fair": c["yes_fair"], "opposite_fair": c["opposite_fair"],
+        "yes_fair_raw": c["yes_fair_raw"], "opposite_fair_raw": c["opposite_fair_raw"],
+    })
 
 
 def test_scan_returns_result_keys(monkeypatch):

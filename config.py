@@ -339,11 +339,13 @@ PINNACLE_MAX_WORKERS           = 4      # gate bounds the rate regardless; this 
 PINNACLE_RATE_LIMIT_RETRIES    = 4
 PINNACLE_RATE_LIMIT_BACKOFF_SEC = 2.0
 # Pinnacle polls faster than the soft books: its snapshot is the only
-# price-accuracy risk (soft ladders are pulled live). The interval is the
-# freshness floor — keep it <= MAX_PIN_SNAPSHOT_AGE_SEC so a healthy snapshot
-# never trips the gate. Watch rate_limit_429 in the sidecars; back off to
-# 35-40 if it climbs.
-PINNACLE_POLL_INTERVAL_SEC     = 30
+# price-accuracy risk (soft ladders are pulled live), so this interval is the
+# floor on how stale a fair value can be — it sets the average "move not yet
+# observed" lag (~interval/2). Keep it <= MAX_PIN_SNAPSHOT_AGE_SEC so a healthy
+# snapshot never trips the gate. The 3.25h window keeps a cycle to ~5-15s, well
+# under this. Watch rate_limit_429 in the sidecars; back off toward 20-25 if it
+# climbs.
+PINNACLE_POLL_INTERVAL_SEC     = 15
 
 # Polymarket poller specifics.
 POLYMARKET_MAX_WORKERS         = 4
@@ -363,9 +365,9 @@ CLOSE_CAPTURE_LEAD_SEC  = 60        # start capture this far before startTime
 CLOSE_CAPTURE_TRAIL_SEC = 15 * 60   # stop capture this far after startTime
 # Skip recording a close when the latest Pinnacle snapshot is older than this.
 # The risk being caught is a dead/stalled poller (which shows minutes of age),
-# not the 45s line-drift limit the scan path uses — so this is deliberately
-# looser, and never false-rejects a legitimate late capture when a Pinnacle
-# cycle runs long.
+# not the tighter line-drift limit the scan path uses (MAX_PIN_SNAPSHOT_AGE_SEC)
+# — so this is deliberately looser, and never false-rejects a legitimate late
+# capture when a Pinnacle cycle runs long.
 CLOSE_CAPTURE_MAX_PIN_AGE_SEC = 120
 # When the exact placement total line is gone at close, interpolate the fair
 # value from the two bracketing alternate lines — but only if they sit within
@@ -393,8 +395,10 @@ SCAN_TRIGGER_POLL_SEC         = float(os.getenv("SCAN_TRIGGER_POLL_SEC", "3.0"))
 # books are re-fetched live at decision time so their snapshot age is only a
 # coverage/liveness check and is gated loose. A blanket value would either
 # false-reject the soft books (which are spaced 60-78s apart) or fail to
-# tighten Pinnacle.
-MAX_PIN_SNAPSHOT_AGE_SEC  = 45
+# tighten Pinnacle. The pin gate is ~2x PINNACLE_POLL_INTERVAL_SEC: tight enough
+# to reject a stalled poller, loose enough to survive a long cycle without
+# false-rejecting a healthy snapshot.
+MAX_PIN_SNAPSHOT_AGE_SEC  = 30
 MAX_SOFT_SNAPSHOT_AGE_SEC = 120
 MIN_HOURS_TO_START   = 0.5
 MAX_HOURS_TO_START   = 3.0
