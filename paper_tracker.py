@@ -424,21 +424,35 @@ def _parse_iso(s):
         return None
 
 
-def _load_latest_pin_snapshot():
+def _load_latest_pin_snapshot_with_age():
+    """Return (rows, age_sec) for the newest Pinnacle snapshot, or (None, None).
+
+    age_sec is wall-clock seconds since the file was written (mtime); the close
+    loop gates on it so a dead/stalled poller can't have its frozen snapshot
+    recorded as a close."""
     try:
         files = sorted(
             os.path.join(config.PIN_SNAPSHOT_DIR, f)
             for f in os.listdir(config.PIN_SNAPSHOT_DIR) if f.endswith(".jsonl")
         )
     except OSError:
-        return None
+        return None, None
     if not files:
-        return None
+        return None, None
+    path = files[-1]
     try:
-        with open(files[-1]) as f:
-            return [json.loads(line) for line in f if line.strip()]
+        age = time.time() - os.path.getmtime(path)
+        with open(path) as f:
+            rows = [json.loads(line) for line in f if line.strip()]
+        return rows, age
     except (OSError, json.JSONDecodeError):
-        return None
+        return None, None
+
+
+def _load_latest_pin_snapshot():
+    """Rows-only wrapper. Kept for real_tracker, which calls this directly."""
+    rows, _ = _load_latest_pin_snapshot_with_age()
+    return rows
 
 
 def _team_side_from_record(record):
@@ -480,6 +494,12 @@ def _find_pin_prices(pin_rows, record):
                     and isinstance(opp_d, str) and opp_d.startswith("not_"))
 
     for r in pin_rows:
+        # Team/non-prop closes lock at game start: only pregame rows count.
+        # Once Pinnacle flips the matchup live, no pregame row matches, so the
+        # last pre-live capture stays frozen. Props are never filtered (Pinnacle
+        # drops them at start; they capture continuously until then).
+        if mtype != "player_prop" and r.get("isLive"):
+            continue
         if r.get("matchupId") != matchup_id:
             continue
         if r.get("type") != mtype:
@@ -560,10 +580,13 @@ def _capture_close_for(record, pin_rows, now):
     """Attempt to capture closing Pinnacle fair prob for this open position.
     Appends to paper_closes.jsonl and populates _closes_by_key on success.
 
-    Team markets capture once in [start - LEAD, start + TRAIL]. Player props
-    capture continuously (last-seen wins) from placement onward, since
-    Pinnacle removes props at game start and the close-window snapshot
-    typically no longer contains the line."""
+    Team/non-prop markets are last-write-wins until the matchup goes live: each
+    pregame capture overwrites the previous, so the recorded close is the last
+    line Pinnacle showed before kickoff. The lock is implicit — once the matchup
+    is live, _find_pin_prices (which skips isLive rows for non-prop) returns None
+    and the last pre-live value stays frozen. Player props capture continuously
+    (last-seen wins) from placement onward, since Pinnacle removes props at game
+    start and the close-window snapshot typically no longer contains the line."""
     book = record.get("book") or "kalshi"
     market_id = record.get("market_id") or record.get("ticker")
     if not market_id:
@@ -571,8 +594,6 @@ def _capture_close_for(record, pin_rows, now):
     side = record.get("side") or "yes"
     key = _key(book, market_id, side)
     is_prop = record.get("market_type") == "player_prop"
-    if key in _closes_by_key and not is_prop:
-        return None
 
     start = _parse_iso(record.get("pin_start_time"))
     if start is None:
@@ -615,31 +636,49 @@ def _capture_close_for(record, pin_rows, now):
         "minutes_before_start": round(dt_to_start / 60.0, 2),
     }
     with _lock:
+        # Last-write-wins for both props and teams, throttled to actual moves:
+        # only append when fair_prob_close changes. Replay is last-write-wins on
+        # the JSONL, so this cuts write noise without affecting the captured
+        # value. Teams are not locked here — the lock comes from _find_pin_prices
+        # returning None once the matchup is live, so this block is unreachable
+        # for a team after kickoff.
         existing = _closes_by_key.get(key)
-        if existing is not None:
-            if not is_prop:
-                return None
-            # Throttle prop-close JSONL writes: only append when fair_prob_close
-            # actually moves. Replay is last-write-wins on the JSONL, so this
-            # cuts noise without affecting the captured value.
-            if existing.get("fair_prob_close") == close["fair_prob_close"]:
-                return None
+        if existing is not None and existing.get("fair_prob_close") == close["fair_prob_close"]:
+            return None
         _append_jsonl(config.PAPER_CLOSES_PATH, close)
         _closes_by_key[key] = close
     return close
 
 
+_pin_stale_logged = False
+
+
+def _log_pin_stale(age):
+    """Log once when close-capture starts skipping due to a stale/missing
+    Pinnacle snapshot; reset by _note_pin_fresh so a dead poller doesn't spam
+    one line per 30s tick."""
+    global _pin_stale_logged
+    if not _pin_stale_logged:
+        shown = "MISSING" if age is None else f"{age:.0f}s"
+        print(f"[paper_tracker] close-capture skipped: pinnacle snapshot stale "
+              f"({shown} > {config.CLOSE_CAPTURE_MAX_PIN_AGE_SEC}s)")
+        _pin_stale_logged = True
+
+
+def _note_pin_fresh():
+    global _pin_stale_logged
+    _pin_stale_logged = False
+
+
 def capture_closes_once():
     """Check each open position once; capture closing fair-prob if within window.
 
-    Props remain pending after their first capture so we keep updating the
-    last-seen fair prob until Pinnacle drops the line (game start)."""
+    All open positions are re-checked every tick: props keep updating their
+    last-seen fair prob until Pinnacle drops the line, and teams keep updating
+    (last-write-wins) until the matchup goes live and the value locks. Skips the
+    whole tick when the latest Pinnacle snapshot is stale (poller down)."""
     with _lock:
-        pending = []
-        for r in _open_positions.values():
-            is_prop = r.get("market_type") == "player_prop"
-            if is_prop or _record_key(r) not in _closes_by_key:
-                pending.append(r)
+        pending = list(_open_positions.values())
     if not pending:
         return
     # Drop any whose startTime is already outside the capture window, so we
@@ -661,9 +700,13 @@ def capture_closes_once():
     if not relevant:
         return
 
-    pin_rows = _load_latest_pin_snapshot()
+    pin_rows, pin_age = _load_latest_pin_snapshot_with_age()
     if pin_rows is None:
         return
+    if pin_age is None or pin_age > config.CLOSE_CAPTURE_MAX_PIN_AGE_SEC:
+        _log_pin_stale(pin_age)
+        return
+    _note_pin_fresh()
     for r in relevant:
         try:
             _capture_close_for(r, pin_rows, now)
