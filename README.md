@@ -4,9 +4,9 @@ A multi-book +EV scanner for U.S.-legal sports prediction markets. It treats Pin
 
 ## What it does
 
-1. Three pollers snapshot each book to JSONL files under `data/` — Pinnacle every 30s (its snapshot is the only price-accuracy risk), the soft books every 60s. Each snapshot gets a `.meta.json` sidecar recording cycle/write timing and the cycle's 429 count.
+1. Three pollers snapshot each book to JSONL files under `data/` — Pinnacle every 15s (its snapshot is the only price-accuracy risk), the soft books every 60s. Each snapshot gets a `.meta.json` sidecar recording cycle/write timing and the cycle's 429 count.
 2. The matcher pairs each soft-book market with its Pinnacle counterpart across moneyline, spread, total, team-total, the 1H/2H half-point variants, and player props.
-3. Pinnacle's 2-way price is devigged multiplicatively to a no-vig fair probability.
+3. Pinnacle's 2-way price is devigged multiplicatively to a no-vig fair probability, then shrunk by a small variance-proportional calibration haircut (`config.haircut_fair`, tuned by `HAIRCUT_K`) before any EV/Kelly math.
 4. The scanner walks the soft book's YES-ask ladder, applies the book's fee rate (`config.PER_BOOK_FEE_RATE`: Kalshi 7%, Polymarket 3%), and computes per-share EV against a per-(book, market-type) edge floor.
 5. The dashboard or CLI surfaces the best opportunities; the paper tracker simulates fills with fractional-Kelly sizing, and the real tracker optionally places live orders.
 
@@ -15,15 +15,17 @@ A multi-book +EV scanner for U.S.-legal sports prediction markets. It treats Pin
 | Path | Description |
 |------|-------------|
 | `config.py` | Single source of truth for every tunable: market enablement, edge thresholds, fee rates, bankroll/risk caps, timing, feature flags, file paths. |
-| `pinnacle_poller.py` | Sharp-book poller. Pregame + live matchups across active sports every 30s. |
+| `pinnacle_poller.py` | Sharp-book poller. Pregame + live matchups across active sports every 15s. |
+| `pinnacle_client.py` | Low-level Pinnacle read client shared by the poller and the engine's decision-time re-fetch; `market_to_row` is the canonical snapshot-row schema. |
 | `kalshi_poller.py` | Kalshi sports poller (moneyline, spread, total, team-total, props) inside a 24h window. |
 | `polymarket_poller.py` | Polymarket US poller — full-game moneyline / spread / total only. |
 | `data_utils.py` | Shared poller plumbing: logging, atomic writes, snapshot rotation + `.meta.json` sidecars, SIGTERM/shutdown, cycle pacing, the shared `RateGate` (min-interval spacing + 429 backoff), and snapshot-freshness checks. |
 | `market_matcher.py` | Book-agnostic Pinnacle ↔ soft-book pairing across all market types and periods. |
 | `devig_utils.py` | Multiplicative devigging of 2-way Pinnacle lines. |
-| `find_ev_bet.py` | One-shot CLI that prints the single best +EV opportunity across all books. |
-| `ev_dashboard.py` | Flask dashboard at `127.0.0.1:5055`. Tabs: Live EV (`/`), Paper (`/paper`), Real Trading (`/real`). A Poll-time column reads each book's sidecar so stale-line decisions trace back to the cycle that produced them. |
-| `paper_tracker.py` | Append-only paper-trading sim: Kelly sizing, settlement polling, CLV capture, replay. |
+| `find_ev_bet.py` | One-shot CLI that prints the single best +EV opportunity across all books; also owns the shared EV math (`evaluate` / `walk_ladder`) and the match→devig→haircut candidate pipeline. |
+| `engine.py` | Headless scan pipeline (`scan()`): freshness gate → match → live ladder fetch → `evaluate` → rank. Side-effect-free — returns ranked rows plus a `placements` list the caller (dashboard or CLI) acts on. Owns the decision-time Pinnacle re-fetch that re-validates every placement's fair live before betting. |
+| `ev_dashboard.py` | Flask dashboard at `127.0.0.1:5055`. Tabs: Live EV (`/`), Paper (`/paper`), Real Trading (`/real`), each with a `v{APP_VERSION}` badge to confirm a deploy is live. Event-triggered: re-runs `engine.scan()` when a poller writes a new snapshot, then places from the result. A Poll-time column reads each book's sidecar so stale-line decisions trace back to the cycle that produced them. |
+| `paper_tracker.py` | Append-only paper-trading sim: fractional-Kelly sizing, upfront-fee application, settlement polling (incl. Kalshi scalar payouts), CLV close-capture, dual EV-basis reporting, replay. |
 | `real_tracker.py` | Real-money tracker. $1000 bankroll, per-book balances, $30/bet cap, -$100 daily halt, gated on `REAL_TRADING_ENABLED`. |
 | `adapters/` | Per-book normalization, ladder fetch, fee model, and authenticated trade clients (`*_trade.py`). New books drop in here and register in `__init__.py`. |
 | `analysis/` | Bias estimation, simulations, haircut backtests, threshold sweeps, latency planning. |
@@ -57,4 +59,6 @@ python3 ev_dashboard.py      # then open http://127.0.0.1:5055
 - Snapshots are age-gated before any signal is acted on, two-tier by role: Pinnacle's snapshot fair is used for display/ranking and is gated tight (`MAX_PIN_SNAPSHOT_AGE_SEC`, 30s), but every placed bet re-fetches its Pinnacle line live at decision time (#6b, `engine._refresh_fair`), so a stale snapshot never reaches a placement; soft ladders are likewise re-fetched live, making their snapshot age only a coverage/liveness check, gated loose (`MAX_SOFT_SNAPSHOT_AGE_SEC`, 120s). The scanner and dashboard share this check via `data_utils.stale_snapshot_reason`.
 - Market enablement is config-gated via `config.market_enabled()`. Soccer moneylines (both books) and Kalshi basketball moneylines are off after backtesting; soccer is further restricted to a 14-league whitelist (`adapters/common.py` `SHARP_SOCCER_LEAGUES`).
 - Real-money trading is off by default and gated on `REAL_TRADING_ENABLED=1`, with a $30 per-bet cap and a -$100 daily-loss halt.
+- Tracker accuracy is graded on two footings, both summed over the same closed-bet subset so they're directly comparable: realized P&L against the placement-basis edge (`net_ev`), and closing-line value — each open bet captures Pinnacle's closing fair near kickoff, yielding per-bet CLV and a close-basis edge (`net_ev_close`). The closing fair is put on the same haircut basis as the placement fair for the EV/Fair-Δ comparison; CLV uses the raw closing line (value vs the price paid).
+- Kalshi markets that resolve `scalar` (postponed/cancelled past the settlement window, or ties → a fractional per-share payout) are settled at that payout rather than left open indefinitely.
 - All tracker state is append-only JSONL; in-memory state is reconstructed by replaying it on import — nothing is mutated in place.
