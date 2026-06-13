@@ -146,18 +146,18 @@ def test_paper_settle_idempotent_scalar(paper_state, monkeypatch):
     assert len(paper_state._settled_records) == 1
 
 
-def test_paper_snapshot_scalar_counts_by_pnl(paper_state):
+def test_paper_snapshot_omits_win_loss_counts(paper_state):
+    # Paper no longer tracks W/L / hit-rate (not shown on the paper dashboard);
+    # snapshot still tallies settled rows without erroring on scalar results.
     paper_state._settled_records.extend([
         {"result": "scalar", "net_pnl": 31.0, "stake": 30.0},
-        {"result": "scalar", "net_pnl": -12.0, "stake": 30.0},
-        {"result": "yes", "net_pnl": 70.0, "stake": 30.0},
         {"result": "no", "net_pnl": -30.0, "stake": 30.0},
     ])
-    snap = paper_state.snapshot()
-    summ = snap["summary"]
-    assert summ["wins"] == 2     # binary yes + scalar profit
-    assert summ["losses"] == 2   # binary no + scalar loss
-    assert summ["total_settled"] == 4
+    summ = paper_state.snapshot()["summary"]
+    assert "wins" not in summ
+    assert "losses" not in summ
+    assert "hit_rate_pct" not in summ
+    assert summ["total_settled"] == 2
 
 
 # --- real_tracker._settle_one ---------------------------------------------

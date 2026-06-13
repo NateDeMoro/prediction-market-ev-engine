@@ -40,20 +40,33 @@ def _settled(expected_profit, fair_prob_close=None, result="yes", market_id="KX-
     return s
 
 
-def test_net_ev_placement_sums_placement_ev():
+def test_net_ev_sums_placement_ev_over_closed_subset():
     pt._settled_records[:] = [_settled(3.0, fair_prob_close=0.6),
-                              _settled(2.0, market_id="KX-2")]  # second has no close
+                              _settled(2.0, market_id="KX-2")]  # no close -> excluded
     summ = pt.snapshot()["summary"]
-    assert summ["net_ev"] == 5.0   # placement EV of both, regardless of close presence
+    # net_ev and net_ev_close share the closed subset, so the no-close bet is out.
+    assert summ["net_ev"] == 3.0
 
 
 def test_net_ev_close_sums_only_rows_with_close():
     pt._settled_records[:] = [_settled(3.0, fair_prob_close=0.6),
                               _settled(2.0, market_id="KX-2")]  # no close
     summ = pt.snapshot()["summary"]
-    expected = round(pt._expected_profit_at(pt._settled_records[0], 0.6), 4)
+    # Close fair is haircut so it shares the placement fair's basis.
+    expected = round(pt._expected_profit_at(pt._settled_records[0],
+                                            config.haircut_fair(0.6)), 4)
     assert summ["net_ev_close"] == expected
     assert summ["net_ev_close_samples"] == 1
+
+
+def test_fair_delta_haircuts_close_fair():
+    # Fair Δ must compare like bases: haircut close fair minus haircut placement
+    # fair (the placement fair is already haircut). A raw close fair would bake in
+    # a ~K*p*(1-p) offset even with zero line movement.
+    pt._settled_records[:] = [_settled(3.0, fair_prob_close=0.6)]  # placement fair_prob=0.55
+    summ = pt.snapshot()["summary"]
+    assert summ["avg_fair_delta"] == round(config.haircut_fair(0.6) - 0.55, 6)
+    assert summ["fair_delta_samples"] == 1
 
 
 def test_settle_does_not_overwrite_expected_profit(monkeypatch, tmp_path):
@@ -114,5 +127,6 @@ def test_real_snapshot_has_both_ev():
     rt._settled_records[:] = [_settled(3.0, fair_prob_close=0.6)]
     summ = rt.snapshot()["summary"]
     assert summ["net_ev"] == 3.0
-    assert summ["net_ev_close"] == round(pt._expected_profit_at(rt._settled_records[0], 0.6), 4)
+    assert summ["net_ev_close"] == round(
+        pt._expected_profit_at(rt._settled_records[0], config.haircut_fair(0.6)), 4)
     assert summ["net_ev_close_samples"] == 1

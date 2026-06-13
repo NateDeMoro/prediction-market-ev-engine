@@ -1017,37 +1017,49 @@ def snapshot():
 
     total_placed = len(_placements)
     total_settled = len(settled)
-    # Scalar (fractional) settlements have no clean winner; classify by P&L sign.
-    wins = sum(1 for s in settled if s.get("result") == "yes"
-               or (s.get("result") == "scalar" and (s.get("net_pnl") or 0.0) > 0))
-    losses = sum(1 for s in settled if s.get("result") == "no"
-                 or (s.get("result") == "scalar" and (s.get("net_pnl") or 0.0) <= 0))
     total_pnl = round(bankroll - config.PAPER_INITIAL_BANKROLL, 4)
     settled_stake = sum(s.get("stake", 0.0) for s in settled)
     settled_pnl = sum(s.get("net_pnl", 0.0) for s in settled)
     roi_pct = (settled_pnl / settled_stake * 100) if settled_stake > 0 else 0.0
-    hit_rate = (wins / total_settled * 100) if total_settled else 0.0
-    # Two EV bases on one consistent footing. net_ev = placement basis: the edge
-    # modeled at bet time (calibration vs realized PnL). net_ev_close = close
-    # basis: the edge measured against Pinnacle's closing fair, summed only over
-    # bets that have a close (sample-gated, like avg_clv). Voids contribute to
-    # neither.
-    settled_live = [s for s in settled if s.get("result") != "void"]
-    net_ev = round(sum(s.get("expected_profit", 0.0) or 0.0 for s in settled_live), 4)
-    close_ev_vals = [
-        _expected_profit_at(s, s["fair_prob_close"])
-        for s in settled_live if isinstance(s.get("fair_prob_close"), (int, float))
-    ]
-    close_ev_vals = [v for v in close_ev_vals if v is not None]
-    net_ev_close = round(sum(close_ev_vals), 4)
-    net_ev_close_samples = len(close_ev_vals)
 
-    clv_vals = [s["clv"] for s in settled if isinstance(s.get("clv"), (int, float))]
+    # Voids contribute to none of the edge/CLV diagnostics below.
+    settled_live = [s for s in settled if s.get("result") != "void"]
+
+    # Two EV bases summed over the SAME closed subset (settled bets that captured a
+    # Pinnacle close) so the two headline numbers are directly comparable — same
+    # bets, same denominator. net_ev = placement basis (edge modeled at entry);
+    # net_ev_close = close basis (edge vs the closing fair). The closing fair is
+    # haircut before the close-basis EV so it sits on the same shrunk basis as the
+    # placement fair; otherwise the gap would conflate the haircut with line moves.
+    net_ev = 0.0
+    net_ev_close = 0.0
+    net_ev_close_samples = 0
+    for s in settled_live:
+        fpc = s.get("fair_prob_close")
+        place_ev = s.get("expected_profit")
+        if not isinstance(fpc, (int, float)) or not isinstance(place_ev, (int, float)):
+            continue
+        close_ev = _expected_profit_at(s, config.haircut_fair(fpc))
+        if close_ev is None:
+            continue
+        net_ev += place_ev
+        net_ev_close += close_ev
+        net_ev_close_samples += 1
+    net_ev = round(net_ev, 4)
+    net_ev_close = round(net_ev_close, 4)
+
+    # CLV is value vs the price paid, so it uses the raw closing fair (the true
+    # market line, as stored at settlement), not the haircut one. Drawn from
+    # settled_live for void-consistency with the EV bases.
+    clv_vals = [s["clv"] for s in settled_live if isinstance(s.get("clv"), (int, float))]
     avg_clv = round(sum(clv_vals) / len(clv_vals), 6) if clv_vals else None
     clv_positive = sum(1 for c in clv_vals if c > 0)
     clv_samples = len(clv_vals)
 
-    fair_deltas = [s["fair_prob_close"] - s["fair_prob"] for s in settled
+    # Fair Δ measures line movement between placement and close, so both fairs must
+    # share a basis: the placement fair is haircut, so haircut the close fair too.
+    fair_deltas = [config.haircut_fair(s["fair_prob_close"]) - s["fair_prob"]
+                   for s in settled_live
                    if isinstance(s.get("fair_prob_close"), (int, float))
                    and isinstance(s.get("fair_prob"), (int, float))]
     avg_fair_delta = round(sum(fair_deltas) / len(fair_deltas), 6) if fair_deltas else None
@@ -1064,9 +1076,6 @@ def snapshot():
             "total_placed": total_placed,
             "total_settled": total_settled,
             "open": len(open_list),
-            "wins": wins,
-            "losses": losses,
-            "hit_rate_pct": round(hit_rate, 2),
             "total_pnl": total_pnl,
             "net_ev": net_ev,
             "net_ev_close": net_ev_close,
