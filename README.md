@@ -4,7 +4,7 @@ A multi-book +EV scanner for U.S.-legal sports prediction markets. It treats Pin
 
 ## What it does
 
-1. Three pollers snapshot Pinnacle (the reference) and each soft book once per minute to JSONL files under `data/`.
+1. Three pollers snapshot each book to JSONL files under `data/` — Pinnacle every 30s (its snapshot is the only price-accuracy risk), the soft books every 60s. Each snapshot gets a `.meta.json` sidecar recording cycle/write timing and the cycle's 429 count.
 2. The matcher pairs each soft-book market with its Pinnacle counterpart across moneyline, spread, total, team-total, the 1H/2H half-point variants, and player props.
 3. Pinnacle's 2-way price is devigged multiplicatively to a no-vig fair probability.
 4. The scanner walks the soft book's YES-ask ladder, applies the book's fee rate (`config.PER_BOOK_FEE_RATE`: Kalshi 7%, Polymarket 3%), and computes per-share EV against a per-(book, market-type) edge floor.
@@ -15,14 +15,14 @@ A multi-book +EV scanner for U.S.-legal sports prediction markets. It treats Pin
 | Path | Description |
 |------|-------------|
 | `config.py` | Single source of truth for every tunable: market enablement, edge thresholds, fee rates, bankroll/risk caps, timing, feature flags, file paths. |
-| `pinnacle_poller.py` | Sharp-book poller. Pregame + live matchups across active sports every 60s. |
+| `pinnacle_poller.py` | Sharp-book poller. Pregame + live matchups across active sports every 30s. |
 | `kalshi_poller.py` | Kalshi sports poller (moneyline, spread, total, team-total, props) inside a 24h window. |
 | `polymarket_poller.py` | Polymarket US poller — full-game moneyline / spread / total only. |
-| `data_utils.py` | Shared poller plumbing: logging, atomic writes, snapshot rotation, SIGTERM/shutdown, cycle pacing. |
+| `data_utils.py` | Shared poller plumbing: logging, atomic writes, snapshot rotation + `.meta.json` sidecars, SIGTERM/shutdown, cycle pacing, the shared `RateGate` (min-interval spacing + 429 backoff), and snapshot-freshness checks. |
 | `market_matcher.py` | Book-agnostic Pinnacle ↔ soft-book pairing across all market types and periods. |
 | `devig_utils.py` | Multiplicative devigging of 2-way Pinnacle lines. |
 | `find_ev_bet.py` | One-shot CLI that prints the single best +EV opportunity across all books. |
-| `ev_dashboard.py` | Flask dashboard at `127.0.0.1:5055`. Tabs: Live EV (`/`), Paper (`/paper`), Real Trading (`/real`). |
+| `ev_dashboard.py` | Flask dashboard at `127.0.0.1:5055`. Tabs: Live EV (`/`), Paper (`/paper`), Real Trading (`/real`). A Poll-time column reads each book's sidecar so stale-line decisions trace back to the cycle that produced them. |
 | `paper_tracker.py` | Append-only paper-trading sim: Kelly sizing, settlement polling, CLV capture, replay. |
 | `real_tracker.py` | Real-money tracker. $1000 bankroll, per-book balances, $30/bet cap, -$100 daily halt, gated on `REAL_TRADING_ENABLED`. |
 | `adapters/` | Per-book normalization, ladder fetch, fee model, and authenticated trade clients (`*_trade.py`). New books drop in here and register in `__init__.py`. |
@@ -54,6 +54,7 @@ python3 ev_dashboard.py      # then open http://127.0.0.1:5055
 - The scanner's surfacing window is 0.5h–3h pregame (`config.MIN_HOURS_TO_START` / `MAX_HOURS_TO_START`) — where news-driven line moves on Pinnacle create tradeable lag on soft books without competing against sub-second live-arb bots.
 - Edge floors are per-(book, market-type) in `config.EDGE_FLOOR_PCT`. Player props use a higher gate (`PROP_MIN_EDGE`, default 4%) than team markets (2%) because Pinnacle's prop max-stake is small, so prop quotes are noisier.
 - Fees are modeled once in `config.PER_BOOK_FEE_RATE` and consumed by both the edge formula and the read adapters; change a rate in one place.
+- Snapshots are age-gated before any signal is acted on, two-tier by role: Pinnacle's fair value is read straight from its snapshot, so it is gated tight (`MAX_PIN_SNAPSHOT_AGE_SEC`, 45s); soft ladders are re-fetched live at decision time, so their snapshot age is only a coverage/liveness check and is gated loose (`MAX_SOFT_SNAPSHOT_AGE_SEC`, 120s). The scanner and dashboard share this check via `data_utils.stale_snapshot_reason`.
 - Market enablement is config-gated via `config.market_enabled()`. Soccer moneylines (both books) and Kalshi basketball moneylines are off after backtesting; soccer is further restricted to a 14-league whitelist (`adapters/common.py` `SHARP_SOCCER_LEAGUES`).
 - Real-money trading is off by default and gated on `REAL_TRADING_ENABLED=1`, with a $30 per-bet cap and a -$100 daily-loss halt.
 - All tracker state is append-only JSONL; in-memory state is reconstructed by replaying it on import — nothing is mutated in place.
