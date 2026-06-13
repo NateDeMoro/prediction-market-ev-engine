@@ -74,6 +74,23 @@ def pin_total_row(matchup_id=1, line=45.5, over=-110, under=-110,
     }
 
 
+def pin_spread_row(matchup_id=1, line=3.5, home=-110, away=-110,
+                   period=0, is_live=False):
+    """A Pinnacle 'spread' snapshot row. `line` is the record-line coordinate:
+    the home (yes) designation sits at points=-line and away (opp) at points=+line,
+    matching _find_pin_prices (yes price is found where pts == -line)."""
+    return {
+        "matchupId": matchup_id,
+        "type": "spread",
+        "period": period,
+        "isLive": is_live,
+        "prices": [
+            {"designation": "home", "points": -line, "price": home},
+            {"designation": "away", "points": line, "price": away},
+        ],
+    }
+
+
 def pin_prop_row(matchup_id=1, prop_matchup_id=99, line=20.5,
                  over=-110, under=-110, is_live=False):
     """A Pinnacle 'player_prop' snapshot row."""

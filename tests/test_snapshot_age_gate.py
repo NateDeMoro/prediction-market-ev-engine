@@ -105,28 +105,30 @@ def test_constants_resolve_through_reexport_chain():
 # ---------------------------------------------------------------------------
 
 def _patch_scan(monkeypatch, pin_age, book_ages):
-    import ev_dashboard
-    monkeypatch.setattr(ev_dashboard, "load_latest_snapshot",
+    # The scan pipeline lives in engine.scan (#2); patch its loaders + matcher
+    # so the freshness gate is exercised with no live adapter.
+    import engine
+    monkeypatch.setattr(engine, "load_latest_snapshot",
                         lambda _dir: ([{}], pin_age))
-    monkeypatch.setattr(ev_dashboard, "_load_soft_markets",
+    monkeypatch.setattr(engine, "_load_soft_markets",
                         lambda: (["soft"], book_ages))
-    monkeypatch.setattr(ev_dashboard, "find_matches",
+    monkeypatch.setattr(engine, "find_matches",
                         lambda *_a, **_k: ([], {}))
-    return ev_dashboard
+    return engine
 
 
 def test_scan_once_raises_on_stale_pinnacle(monkeypatch):
-    ev_dashboard = _patch_scan(monkeypatch, pin_age=90, book_ages={"kalshi": 30})
+    engine = _patch_scan(monkeypatch, pin_age=90, book_ages={"kalshi": 30})
     with pytest.raises(RuntimeError) as exc:
-        ev_dashboard.scan_once()
+        engine.scan()
     assert "pinnacle" in str(exc.value).lower()
 
 
 def test_scan_once_tolerates_loose_soft(monkeypatch):
     # 100s soft snapshot: over the 45s pin gate but under the 120s soft gate.
-    # scan_once must proceed past the freshness gate without raising.
-    ev_dashboard = _patch_scan(monkeypatch, pin_age=20, book_ages={"kalshi": 100})
-    result = ev_dashboard.scan_once()
+    # scan must proceed past the freshness gate without raising.
+    engine = _patch_scan(monkeypatch, pin_age=20, book_ages={"kalshi": 100})
+    result = engine.scan()
     assert result["pin_age"] == 20
 
 
@@ -168,13 +170,13 @@ def test_age_falls_back_to_mtime_without_captured_at(tmp_path):
 
 def test_scan_once_surfaces_cross_book_skew(monkeypatch):
     # pin 20s old, kalshi 45s old → capture skew = |45-20| = 25s, surfaced not gated.
-    ev_dashboard = _patch_scan(monkeypatch, pin_age=20, book_ages={"kalshi": 45})
-    result = ev_dashboard.scan_once()
+    engine = _patch_scan(monkeypatch, pin_age=20, book_ages={"kalshi": 45})
+    result = engine.scan()
     assert abs(result["cross_book_skew_sec"] - 25) < 1e-9
 
 
 def test_cross_book_skew_none_when_no_soft_age(monkeypatch):
     # No soft ages at all → no skew computable, surfaced as None (not a crash).
-    ev_dashboard = _patch_scan(monkeypatch, pin_age=20, book_ages={})
-    result = ev_dashboard.scan_once()
+    engine = _patch_scan(monkeypatch, pin_age=20, book_ages={})
+    result = engine.scan()
     assert result["cross_book_skew_sec"] is None

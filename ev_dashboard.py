@@ -2,50 +2,34 @@
 """
 Local EV dashboard (multi-book).
 
-Runs a background scanner every 60s that loads the latest Pinnacle snapshot
-plus one snapshot per registered soft-book adapter, normalizes each book's
-rows, matches markets, pulls the live YES-ask ladder via the adapter, and
-computes EV per share under the book's own fee model. Serves a local HTML
-page at http://127.0.0.1:5055 that shows the top 25 EV bets with a per-book
-badge and client-side book + market-type filter chips.
+Serves a local HTML page at http://127.0.0.1:5055 showing the top 25 EV bets
+with a per-book badge and client-side book + market-type filter chips. The
+scan/match/evaluate pipeline lives in engine.py; the background scanner is
+event-triggered (engine.scan() re-runs on a new snapshot write — mtime advance
+polled every SCAN_TRIGGER_POLL_SEC — with a DASHBOARD_REFRESH_SEC fallback) and
+places each (side_row, ladder) the engine returns via paper_tracker / real_tracker.
 
 Run: python3 ev_dashboard.py
 Stop: Ctrl-C
 """
-import json
-import os
 import threading
 import time
 import traceback
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from datetime import datetime, timezone
 
 from flask import Flask, jsonify, render_template_string
 
-from adapters import adapter_for, all_adapters
-from data_utils import read_latest_snapshot_meta, stale_snapshot_reason
-from find_ev_bet import (
-    SNAP_PIN,
-    MAX_PIN_SNAPSHOT_AGE_SEC,
-    MAX_SOFT_SNAPSHOT_AGE_SEC,
-    american_to_decimal,
-    breakeven_fair,
-    evaluate,
-    find_matches,
-    load_latest_snapshot,
-    price_to_american,
-)
+import engine
+from engine import TOP_N
+# Re-exported so imports of these constants from ev_dashboard keep resolving.
+from find_ev_bet import MAX_PIN_SNAPSHOT_AGE_SEC, MAX_SOFT_SNAPSHOT_AGE_SEC
+import data_utils
 import paper_tracker
 import real_tracker
 import config
 
 REFRESH_SEC = config.DASHBOARD_REFRESH_SEC
-LADDER_FETCH_TIMEOUT_SEC = config.LADDER_FETCH_TIMEOUT_SEC
-_LADDER_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ladder")
-# Superset matcher produces candidates across ML / spread / total / team_total
-# and across every registered book. A larger slice lets the client-side filter
-# chips surface meaningful rows per slice without a server round-trip.
-TOP_N = 25
+SCAN_TRIGGER_POLL_SEC = config.SCAN_TRIGGER_POLL_SEC
 
 app = Flask(__name__)
 
@@ -62,195 +46,70 @@ _state = {
 _lock = threading.Lock()
 
 
-def _load_soft_markets():
-    """Normalize the latest snapshot from every registered adapter."""
-    soft = []
-    ages = {}
-    for adapter in all_adapters():
-        rows, age = load_latest_snapshot(adapter.SNAPSHOT_DIR)
-        ages[adapter.BOOK] = age
-        if rows is None:
-            continue
-        for raw in rows:
-            nm = adapter.normalize_market(raw)
-            if nm is not None:
-                soft.append(nm)
-    return soft, ages
-
-
-def scan_once():
-    pin_rows, pin_age = load_latest_snapshot(SNAP_PIN)
-    if pin_rows is None:
-        raise RuntimeError("missing pinnacle snapshot")
-    soft_markets, book_ages = _load_soft_markets()
-    if not soft_markets:
-        raise RuntimeError("no soft-book snapshots")
-    reason = stale_snapshot_reason(
-        pin_age, book_ages,
-        MAX_PIN_SNAPSHOT_AGE_SEC, MAX_SOFT_SNAPSHOT_AGE_SEC,
-        missing_soft_is_stale=True,
-    )
-    if reason:
-        raise RuntimeError(reason)
-
-    pin_meta = read_latest_snapshot_meta(SNAP_PIN)
-    pin_poll_sec = (pin_meta or {}).get("cycle_elapsed_sec")
-    book_poll_sec_map = {}
-    for adapter in all_adapters():
-        meta = read_latest_snapshot_meta(adapter.SNAPSHOT_DIR)
-        if meta:
-            book_poll_sec_map[adapter.BOOK] = meta.get("cycle_elapsed_sec")
-
-    candidates, stats = find_matches(pin_rows, soft_markets)
-
-    rows = []
-    for c in candidates:
-        nm = c["market"]
-        book = c["book"]
-        adapter = adapter_for(book)
+def _place_all(placements):
+    """Hand each (side_row, ladder) from the engine to both trackers. Per-row
+    exceptions are swallowed so one bad placement never aborts the cycle. The
+    engine is side-effect free; placement is the dashboard caller's job (#2)."""
+    for side_row, ladder in placements:
         try:
-            fut = _LADDER_EXECUTOR.submit(adapter.fetch_both_ladders, c["market_id"])
-            yes_ladder, no_ladder = fut.result(timeout=LADDER_FETCH_TIMEOUT_SEC)
-        except FutureTimeout:
-            print(f"[scan_once] ladder fetch timeout {book}:{c['market_id']}")
-            continue
+            paper_tracker.maybe_place(side_row, ladder)
         except Exception:
-            continue
+            traceback.print_exc()
+        try:
+            real_tracker.maybe_place(side_row, ladder)
+        except Exception:
+            traceback.print_exc()
 
-        sides = [("yes", yes_ladder, c["yes_fair"])]
-        if getattr(adapter, "SUPPORTS_NO_SIDE", False) and no_ladder:
-            sides.append(("no", no_ladder, c["opposite_fair"]))
 
-        vig_pct = (
-            1 / american_to_decimal(c["yes_side_price"])
-            + 1 / american_to_decimal(c["opposite_side_price"])
-            - 1
-        ) * 100
-        fee_fn = adapter.taker_fee_per_share
+def _apply_result(result):
+    with _lock:
+        _state["last_updated"] = datetime.now(timezone.utc).isoformat()
+        _state["pin_age"] = result["pin_age"]
+        _state["book_ages"] = result["book_ages"]
+        _state["cross_book_skew_sec"] = result["cross_book_skew_sec"]
+        _state["stats"] = result["stats"]
+        _state["rows"] = result["rows"]
+        _state["prop_rows"] = result["prop_rows"]
+        _state["error"] = None
 
-        for side, ladder, fair in sides:
-            if not ladder:
-                continue
 
-            selection = c["selection"]
-            if side == "no":
-                # Prefix flags it in the UI without requiring a chip filter.
-                selection = f"NO {selection}"
+def _run_scan_cycle():
+    """One scan + place + state-bind, with errors surfaced into _state."""
+    try:
+        result = engine.scan()
+        _place_all(result["placements"])
+        _apply_result(result)
+    except Exception as e:
+        with _lock:
+            _state["last_updated"] = datetime.now(timezone.utc).isoformat()
+            _state["error"] = f"{type(e).__name__}: {e}"
+            traceback.print_exc()
 
-            # Paper tracker: simulate a Kelly-sized bet the first time this
-            # (book, market_id, side) enters the in_window bucket.
-            book_elapsed = book_poll_sec_map.get(book)
-            total_elapsed = (
-                pin_poll_sec + book_elapsed
-                if pin_poll_sec is not None and book_elapsed is not None
-                else None
-            )
-            side_row = {
-                **c,
-                "side": side,
-                "fair_prob": fair,
-                "selection": selection,
-                "pin_poll_sec": pin_poll_sec,
-                "book_poll_sec": book_elapsed,
-                "total_poll_sec": total_elapsed,
-            }
-            try:
-                paper_tracker.maybe_place(side_row, ladder)
-            except Exception:
-                traceback.print_exc()
-            try:
-                real_tracker.maybe_place(side_row, ladder)
-            except Exception:
-                traceback.print_exc()
 
-            best_ask, best_qty = ladder[0]
-            ev_per_share = (fair * (1 - best_ask)
-                            - (1 - fair) * best_ask
-                            - fee_fn(best_ask, fair))
-
-            ev_result = evaluate(ladder, fair, fee_fn, book, c["market_type"])
-            if ev_result is None:
-                continue
-
-            rows.append({
-                "book": book,
-                "market_id": c["market_id"],
-                "side": side,
-                "market_url": c["market_url"],
-                "title": nm.title,
-                "pin_matchup": c["pin_matchup"],
-                "market_type": c["market_type"],
-                "period_label": c["period_label"],
-                "line": c.get("line"),
-                "selection": selection,
-                "yes_pin_name": c["yes_pin_name"],
-                "yes_side_label": c["yes_side_label"],
-                "opposite_side_label": c["opposite_side_label"],
-                "yes_side_price": c["yes_side_price"],
-                "opposite_side_price": c["opposite_side_price"],
-                "yes_fair": c["yes_fair"],
-                "opposite_fair": c["opposite_fair"],
-                "fair_prob": fair,
-                "vig_pct": vig_pct,
-                "book_ask": best_ask,
-                "book_ask_american": price_to_american(best_ask),
-                "book_depth": best_qty,
-                "ev_per_share": ev_per_share,
-                "ev_pct_at_best": ev_per_share / best_ask * 100 if best_ask else 0.0,
-                "breakeven_fair": breakeven_fair(best_ask, fee_fn),
-                "pos_shares": ev_result["shares"],
-                "pos_stake": ev_result["stake"],
-                "pos_expected_profit": ev_result["exp_profit"],
-                "pos_ev_pct": ev_result["ev_pct"],
-                "pin_start_time": c.get("pin_start_time"),
-                "in_window": c.get("in_window", False),
-                "player": c.get("player"),
-                "stat": c.get("stat"),
-            })
-
-    # Rank: in-window first, then by ev_per_share descending. Always surfaces
-    # actionable rows ahead of out-of-window fallbacks so the table is never
-    # empty.
-    rows.sort(key=lambda r: (r["in_window"], r["ev_per_share"]), reverse=True)
-
-    prop_rows = [r for r in rows if r["market_type"] == "player_prop"][:5]
-
-    # Cross-book capture skew: how far apart in wall-clock the Pinnacle snapshot
-    # and the furthest soft snapshot were captured. age = now - captured_at for
-    # both, so the skew is just |book_age - pin_age|. Surfaced, not gated — the
-    # soft ladder is re-fetched live at decision time.
-    soft_skews = [abs(a - pin_age) for a in book_ages.values() if a is not None]
-    cross_book_skew_sec = max(soft_skews) if soft_skews else None
-
-    return {
-        "pin_age": pin_age,
-        "book_ages": book_ages,
-        "cross_book_skew_sec": cross_book_skew_sec,
-        "stats": stats,
-        "rows": rows[:TOP_N],
-        "prop_rows": prop_rows,
-    }
+def _should_scan(mtime, last_mtime, elapsed, refresh_sec):
+    """#1: scan when a poller wrote a new snapshot (mtime advanced) or the
+    refresh fallback elapsed — the fallback guarantees a dead poller still
+    refreshes the stale-snapshot error instead of freezing the dashboard."""
+    if mtime is not None and mtime != last_mtime:
+        return True
+    return elapsed >= refresh_sec
 
 
 def scanner_loop():
+    """Event-triggered scan: poll the snapshot dirs every SCAN_TRIGGER_POLL_SEC
+    and recompute on a new write (or the DASHBOARD_REFRESH_SEC fallback), instead
+    of a fixed 60s timer (#1)."""
+    last_mtime = None
+    last_scan = None
     while True:
-        try:
-            result = scan_once()
-            with _lock:
-                _state["last_updated"] = datetime.now(timezone.utc).isoformat()
-                _state["pin_age"] = result["pin_age"]
-                _state["book_ages"] = result["book_ages"]
-                _state["cross_book_skew_sec"] = result["cross_book_skew_sec"]
-                _state["stats"] = result["stats"]
-                _state["rows"] = result["rows"]
-                _state["prop_rows"] = result["prop_rows"]
-                _state["error"] = None
-        except Exception as e:
-            with _lock:
-                _state["last_updated"] = datetime.now(timezone.utc).isoformat()
-                _state["error"] = f"{type(e).__name__}: {e}"
-                traceback.print_exc()
-        time.sleep(REFRESH_SEC)
+        mtime = data_utils.latest_snapshot_mtime(engine.snapshot_dirs())
+        now = time.monotonic()
+        elapsed = float("inf") if last_scan is None else now - last_scan
+        if _should_scan(mtime, last_mtime, elapsed, REFRESH_SEC):
+            _run_scan_cycle()
+            last_mtime = mtime
+            last_scan = now
+        time.sleep(SCAN_TRIGGER_POLL_SEC)
 
 
 PAGE = """<!doctype html>

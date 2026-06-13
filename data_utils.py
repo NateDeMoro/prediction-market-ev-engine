@@ -179,6 +179,28 @@ def read_latest_snapshot_meta(dir_path):
         return None
 
 
+def latest_snapshot_mtime(dirs):
+    """Newest snapshot mtime across the given dirs, or None if none has a
+    *.jsonl yet. Use when: deciding whether a poller has written a new snapshot
+    since the last scan (the #1 event trigger). mtime — not captured_at — is the
+    right signal here: it advances on the atomic rename of every new write,
+    independent of the recorded capture clock."""
+    newest = None
+    for d in dirs:
+        try:
+            files = glob.glob(os.path.join(d, "*.jsonl"))
+        except OSError:
+            continue
+        for f in files:
+            try:
+                m = os.path.getmtime(f)
+            except OSError:
+                continue
+            if newest is None or m > newest:
+                newest = m
+    return newest
+
+
 def snapshot_age_seconds(jsonl_path):
     """Age in seconds of a snapshot, from its sidecar `captured_at` when present,
     else the file mtime. Use when: judging snapshot freshness — capture time is

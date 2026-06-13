@@ -13,7 +13,8 @@ import paper_tracker as pt
 from devig_utils import devig_multiplicative
 
 from conftest import (
-    pin_total_row, pin_prop_row, placement, seed_open, seed_close, read_closes,
+    pin_total_row, pin_spread_row, pin_prop_row, placement, seed_open, seed_close,
+    read_closes,
 )
 
 
@@ -295,6 +296,93 @@ def test_interpolate_side_perspective():
     f_hi = devig_multiplicative([-130, 120])[0]
     expected = _interp(f_lo, f_hi, 45.0, 46.0, 45.5)
     assert pt._interpolate_total_fair(rows, rec) == pytest.approx(expected)
+
+
+# ===========================================================================
+# #22 — moved-line interpolation (spreads)
+# ===========================================================================
+
+def _spread_rec(line=3.5):
+    return placement(market_type="spread", line=line, yes_designation="home",
+                     opposite_designation="away")
+
+
+def test_interpolate_spread_fair_brackets():
+    # U22a/b: devig each bracketing alternate first, interpolate in the record's
+    # (home) perspective at the placement line. Rows keyed by record-line = -home_pts.
+    rec = _spread_rec(line=3.5)
+    rows = [pin_spread_row(line=3.0, home=-110, away=-110),
+            pin_spread_row(line=4.0, home=120, away=-130)]
+    f_lo = devig_multiplicative([-110, -110])[0]   # [home, away] order
+    f_hi = devig_multiplicative([120, -130])[0]
+    expected = _interp(f_lo, f_hi, 3.0, 4.0, 3.5)
+    assert pt._interpolate_spread_fair(rows, rec) == pytest.approx(expected)
+
+
+def test_interpolate_spread_devigs_before_interpolating():
+    # U22a: interpolating devigged fairs differs from interpolating raw implied probs.
+    from devig_utils import american_to_decimal
+    rec = _spread_rec(line=3.5)
+    rows = [pin_spread_row(line=3.0, home=-120, away=-110),
+            pin_spread_row(line=4.0, home=110, away=-150)]
+    devig_interp = _interp(devig_multiplicative([-120, -110])[0],
+                           devig_multiplicative([110, -150])[0], 3.0, 4.0, 3.5)
+    raw_interp = _interp(1 / american_to_decimal(-120), 1 / american_to_decimal(110),
+                         3.0, 4.0, 3.5)
+    got = pt._interpolate_spread_fair(rows, rec)
+    assert got == pytest.approx(devig_interp)
+    assert got != pytest.approx(raw_interp)
+
+
+def test_interpolate_spread_respects_distance_cap():
+    rec = _spread_rec(line=3.5)
+    rows = [pin_spread_row(line=2.0, home=-110, away=-110),
+            pin_spread_row(line=5.0, home=-110, away=-110)]  # gap 3.0 > cap
+    assert pt._interpolate_spread_fair(rows, rec) is None
+
+
+def test_interpolate_spread_no_extrapolation():
+    rec = _spread_rec(line=5.5)  # above all offered
+    rows = [pin_spread_row(line=3.0, home=-110, away=-110),
+            pin_spread_row(line=4.0, home=-110, away=-110)]
+    assert pt._interpolate_spread_fair(rows, rec) is None
+
+
+def test_interpolate_spread_skips_live_neighbors():
+    rec = _spread_rec(line=3.5)
+    rows = [pin_spread_row(line=3.0, home=-110, away=-110, is_live=False),
+            pin_spread_row(line=4.0, home=-110, away=-110, is_live=True)]  # live hi
+    assert pt._interpolate_spread_fair(rows, rec) is None  # no pregame upper bracket
+
+
+def test_capture_routes_spread_to_interpolator(closes_path):
+    # U22e: capture_close_for falls back to the spread interpolator (not totals)
+    # when the exact spread line is gone, marking the close interpolated.
+    rec = placement(market_type="spread", line=3.5, yes_designation="home",
+                    opposite_designation="away", start_in_sec=30)
+    seed_open(rec)
+    now = datetime.now(timezone.utc)
+    rows = [pin_spread_row(line=3.0, home=-110, away=-110),
+            pin_spread_row(line=4.0, home=120, away=-130)]   # no exact 3.5
+    pt._capture_close_for(rec, rows, now)
+    close = pt._closes_by_key[pt._record_key(rec)]
+    assert close["was_interpolated"] is True
+    assert close["yes_side_price_close"] is None
+    expected = _interp(devig_multiplicative([-110, -110])[0],
+                       devig_multiplicative([120, -130])[0], 3.0, 4.0, 3.5)
+    assert close["fair_prob_close"] == pytest.approx(expected, abs=1e-6)
+
+
+def test_capture_spread_drop_counted(closes_path):
+    rec = placement(market_type="spread", line=3.5, yes_designation="home",
+                    opposite_designation="away", start_in_sec=30)
+    seed_open(rec)
+    now = datetime.now(timezone.utc)
+    rows = [pin_spread_row(line=6.0, home=-110, away=-110),
+            pin_spread_row(line=7.0, home=-110, away=-110)]  # out of range
+    assert pt._capture_close_for(rec, rows, now) is None
+    assert read_closes(closes_path) == []
+    assert pt._record_key(rec) in pt._PAPER_CTX.interp_dropped_keys
 
 
 # ===========================================================================

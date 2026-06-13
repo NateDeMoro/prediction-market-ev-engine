@@ -277,6 +277,24 @@ def min_edge_pct(book: str, market_type: str, avg_fill_price) -> float:
     return max(floor, be_plus_margin)
 
 
+# Calibration haircut applied to Pinnacle's devigged fair probability before any
+# EV / Kelly math (config.haircut_fair, wired once in find_ev_bet.find_matches).
+# Shape: fair_adj = fair - K*fair*(1-fair) — a variance-proportional shrinkage,
+# largest near fair=0.5 and ~0 at the extremes. It is NOT a favorite-longshot
+# correction (that would live in devig_utils). K is tuned by replaying history
+# under candidate values (analysis/backtest_haircut.py); K=0 disables it.
+HAIRCUT_K = float(os.getenv("HAIRCUT_K", "0.064"))
+
+
+def haircut_fair(p):
+    """Shrink a fair probability toward less confidence: p - K*p*(1-p).
+    Use when: converting a devigged Pinnacle fair into the operative fair the
+    scanner bets and sizes against. None in, None out; K=0 is an exact no-op."""
+    if p is None:
+        return None
+    return p - HAIRCUT_K * p * (1.0 - p)
+
+
 # ---------------------------------------------------------------------------
 # 3. Bankroll / risk
 # ---------------------------------------------------------------------------
@@ -355,12 +373,20 @@ CLOSE_CAPTURE_MAX_PIN_AGE_SEC = 120
 # keeps the linear-in-prob interpolation honest). Wider gaps / out-of-range
 # lines are dropped, not extrapolated.
 CLOSE_CAPTURE_INTERP_MAX_POINTS = 1.0
+# Same idea for spreads (#22), separate because spreads step wider (1/2/3 pts)
+# and key numbers create bigger gaps. Start at totals' cap; widen only if spread
+# close-capture rate stays low.
+CLOSE_CAPTURE_INTERP_MAX_POINTS_SPREAD = 1.0
 ORDER_POLL_SEC          = 5
 BALANCE_LOG_POLL_SEC    = 5 * 60
 
 # Dashboard.
 DASHBOARD_REFRESH_SEC         = 60
 LADDER_FETCH_TIMEOUT_SEC      = float(os.getenv("LADDER_FETCH_TIMEOUT_SEC", "5.0"))
+# #1: the scanner re-runs when a poller writes a new snapshot (mtime advance),
+# polling the snapshot dirs this often. DASHBOARD_REFRESH_SEC is the fallback so a
+# dead poller still refreshes the stale-state error.
+SCAN_TRIGGER_POLL_SEC         = float(os.getenv("SCAN_TRIGGER_POLL_SEC", "3.0"))
 
 # find_ev_bet / snapshot age. Two-tier by role: Pinnacle fair value is read
 # straight from its snapshot (price-accuracy risk) so it is gated tight; soft
