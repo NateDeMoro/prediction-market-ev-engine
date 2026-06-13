@@ -31,7 +31,9 @@ DATA_DIR = os.path.join(DIR, "data")
 TRADES = os.path.join(DATA_DIR, "paper_trades.jsonl")
 SETTLES = os.path.join(DATA_DIR, "paper_settlements.jsonl")
 
-HAIRCUT_K = float(os.environ.get("HAIRCUT_K", "0.064"))
+# Single source of truth: config.haircut_fair / config.HAIRCUT_K (both read the
+# HAIRCUT_K env var). Sweep K by exporting HAIRCUT_K before running this script.
+HAIRCUT_K = config.HAIRCUT_K
 KELLY_FRACTION = config.KELLY_FRACTION
 
 
@@ -51,10 +53,6 @@ def _read(path):
     return rows
 
 
-def _haircut(p):
-    return p - HAIRCUT_K * p * (1.0 - p)
-
-
 def _resize_under_haircut(trade, bankroll):
     """Re-run size_bet against the original fill levels with haircut fair_prob.
 
@@ -65,14 +63,19 @@ def _resize_under_haircut(trade, bankroll):
     inventory at those prices), but it's the closest thing to ground truth we
     have without re-walking the original snapshot.
     """
-    fair_raw = trade.get("fair_prob")
+    # Post-#7 trades persist the haircut fair in `fair_prob`; replay from the raw
+    # devig (`fair_prob_raw`) so we never haircut an already-haircut value. Older
+    # trades have no `fair_prob_raw`, where `fair_prob` is the raw devig.
+    fair_raw = trade.get("fair_prob_raw")
+    if not isinstance(fair_raw, (int, float)):
+        fair_raw = trade.get("fair_prob")
     book = trade.get("book") or "kalshi"
     levels = trade.get("levels") or []
     if not isinstance(fair_raw, (int, float)) or not levels:
         return None
     adapter = adapter_for(book)
 
-    fair_adj = _haircut(fair_raw)
+    fair_adj = config.haircut_fair(fair_raw)
     sized = pt.size_bet(levels, fair_adj, bankroll, adapter)
     return fair_adj, sized
 

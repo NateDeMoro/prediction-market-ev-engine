@@ -483,6 +483,7 @@ def maybe_place(row, ladder, now=None):
         "yes_designation": row.get("yes_designation"),
         "opposite_designation": row.get("opposite_designation"),
         "fair_prob": fair_prob,
+        "fair_prob_raw": row.get("fair_prob_raw"),
         "avg_fill_price": sized["avg_fill_price"],
         "shares": sized["shares"],
         "stake": sized["stake"],

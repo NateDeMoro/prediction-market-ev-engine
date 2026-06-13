@@ -384,6 +384,7 @@ def maybe_place(row, ladder, now=None):
         "yes_designation": row.get("yes_designation"),
         "opposite_designation": row.get("opposite_designation"),
         "fair_prob": row.get("fair_prob"),
+        "fair_prob_raw": row.get("fair_prob_raw"),
         "avg_fill_price": sized["avg_fill_price"],
         "shares": sized["shares"],
         "stake": sized["stake"],
@@ -656,6 +657,56 @@ def _interpolate_total_fair(pin_rows, record):
     return f_lo + (line - lo) / (hi - lo) * (f_hi - f_lo)
 
 
+def _interpolate_spread_fair(pin_rows, record):
+    """Spread analogue of _interpolate_total_fair (#22): interpolate a spread's
+    closing fair (in the record's yes-designation perspective) from the two
+    pregame alternate spread lines bracketing the placement line, used when the
+    exact line is absent. Returns the fair, or None when there is no bracket, the
+    bracket exceeds CLOSE_CAPTURE_INTERP_MAX_POINTS_SPREAD, or the line is out of
+    range — never extrapolates. Each line is devigged before interpolating.
+
+    Coordinate: the record `line` maps to the pin yes-designation points as
+    pts = -line (see _find_pin_prices), so each alternate row's record-equivalent
+    line is -(yes-designation points)."""
+    matchup_id = record.get("pin_matchup_id")
+    period = PIN_PERIOD_LABEL_TO_INT.get(record.get("period_label"))
+    yes_d = record.get("yes_designation")
+    opp_d = record.get("opposite_designation")
+    line = record.get("line")
+    if (matchup_id is None or period is None or line is None
+            or yes_d is None or opp_d is None):
+        return None
+
+    fair_by_line = {}
+    for r in pin_rows:
+        if r.get("isLive"):
+            continue
+        if (r.get("matchupId") != matchup_id or r.get("type") != "spread"
+                or r.get("period") != period):
+            continue
+        yes_px = opp_px = yes_pts = None
+        for p in (r.get("prices") or []):
+            d = p.get("designation")
+            if d == yes_d:
+                yes_px, yes_pts = p.get("price"), p.get("points")
+            elif d == opp_d:
+                opp_px = p.get("price")
+        if yes_px is None or opp_px is None or yes_pts is None:
+            continue
+        row_line = -yes_pts
+        devigged = devig_multiplicative([yes_px, opp_px])
+        if devigged is not None:
+            fair_by_line[row_line] = devigged[0]
+
+    lo = max((L for L in fair_by_line if L < line), default=None)
+    hi = min((L for L in fair_by_line if L > line), default=None)
+    if (lo is None or hi is None
+            or (hi - lo) > config.CLOSE_CAPTURE_INTERP_MAX_POINTS_SPREAD):
+        return None
+    f_lo, f_hi = fair_by_line[lo], fair_by_line[hi]
+    return f_lo + (line - lo) / (hi - lo) * (f_hi - f_lo)
+
+
 def capture_close_for(ctx, record, pin_rows, now):
     """Attempt to capture closing Pinnacle fair prob for this open position.
     Appends to ctx's closes JSONL and populates ctx.closes_by_key on success.
@@ -696,10 +747,13 @@ def capture_close_for(ctx, record, pin_rows, now):
         if devigged is None:
             return None
         yes_fair, _ = devigged
-    elif record.get("market_type") == "total":
+    elif record.get("market_type") in ("total", "spread"):
         # Exact line gone: interpolate from bracketing alternates (#22). Drop
         # (and count) when no usable bracket exists rather than extrapolating.
-        yes_fair = _interpolate_total_fair(pin_rows, record)
+        if record.get("market_type") == "total":
+            yes_fair = _interpolate_total_fair(pin_rows, record)
+        else:
+            yes_fair = _interpolate_spread_fair(pin_rows, record)
         if yes_fair is None:
             _note_close_drop(ctx, record)
             return None

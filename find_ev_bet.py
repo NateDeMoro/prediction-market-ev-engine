@@ -233,7 +233,14 @@ def find_matches(pin_rows, soft_markets):
         if devigged is None:
             stats["devig_failed"] = stats.get("devig_failed", 0) + 1
             continue
-        yes_fair, opp_fair = devigged
+        yes_fair_raw, opp_fair_raw = devigged
+        # #7: shrink each side's fair toward less confidence before any EV/Kelly
+        # math. Applied once here, the single production point of fair, so every
+        # downstream site (evaluate, size_bet, maybe_place, recorded fair_prob,
+        # fair_delta) inherits it without a per-site edit or double-application.
+        # Raw devig kept as *_raw for audit + backtest replay (not displayed).
+        yes_fair = config.haircut_fair(yes_fair_raw)
+        opp_fair = config.haircut_fair(opp_fair_raw)
 
         adapter = adapter_for(nm.book)
         candidates.append({
@@ -260,6 +267,8 @@ def find_matches(pin_rows, soft_markets):
             "yes_fair": yes_fair,
             "opposite_fair": opp_fair,
             "fair_prob": yes_fair,
+            "yes_fair_raw": yes_fair_raw,
+            "opposite_fair_raw": opp_fair_raw,
             "yes_pin_name": pair.yes_side_label,
             "yes_soft_name": nm.yes_sub_title or (nm.team or ""),
             "in_window": in_window,
