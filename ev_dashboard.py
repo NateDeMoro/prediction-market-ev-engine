@@ -706,7 +706,7 @@ function render(data) {
 
   const settledBody = document.getElementById('settled');
   settledBody.innerHTML = '';
-  (data.settled || []).slice().reverse().forEach(r => {
+  (data.settled || []).slice().reverse().slice(0, 100).forEach(r => {
     const tr = document.createElement('tr');
     const resultClass = r.result === 'yes' ? 'pos' : 'neg';
     const pnlClass = (r.net_pnl || 0) >= 0 ? 'pos' : 'neg';
@@ -985,7 +985,7 @@ function render(data) {
 
   const settledBody = document.getElementById('settled');
   settledBody.innerHTML = '';
-  (data.settled || []).slice().reverse().forEach(r => {
+  (data.settled || []).slice().reverse().slice(0, 100).forEach(r => {
     const tr = document.createElement('tr');
     const won = r.result === r.side;
     const resultClass = won ? 'pos' : 'neg';
