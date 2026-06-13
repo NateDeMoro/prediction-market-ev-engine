@@ -444,15 +444,29 @@ def fetch_both_ladders(market_id):
 
 
 def fetch_settlement(market_id):
-    """Return 'yes' | 'no' | None based on Kalshi's market status+result."""
+    """Return 'yes' | 'no' | float | None from Kalshi's market status+result.
+
+    Binary markets resolve with result 'yes'/'no'. Some sports markets resolve
+    'scalar' (postponed/cancelled past the 2-day window, or ties) — finalized
+    with a fractional `settlement_value_dollars` per-YES-share payout instead of
+    a clean winner. For those, return that payout as a float in [0,1]; the caller
+    credits the side-correct share of it. Fail closed (None) if the scalar value
+    is missing/unparseable, leaving the position open to retry."""
     r = requests.get(f"{BASE}/markets/{market_id}",
                      headers=HEADERS, timeout=REQUEST_TIMEOUT)
     r.raise_for_status()
     market = r.json().get("market") or {}
     status = (market.get("status") or "").lower()
     result = (market.get("result") or "").lower()
+    finalized = status in ("settled", "finalized", "closed")
+    if result == "scalar" and finalized:
+        try:
+            payout = float(market.get("settlement_value_dollars"))
+        except (TypeError, ValueError):
+            return None
+        return max(0.0, min(1.0, payout))
     if result not in ("yes", "no"):
         return None
-    if status not in ("settled", "finalized", "closed") and not result:
+    if not finalized and not result:
         return None
     return result

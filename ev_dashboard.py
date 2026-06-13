@@ -592,7 +592,10 @@ function render(data) {
   settledBody.innerHTML = '';
   (data.settled || []).slice().reverse().slice(0, 100).forEach(r => {
     const tr = document.createElement('tr');
-    const resultClass = r.result === 'yes' ? 'pos' : 'neg';
+    // Scalar (fractional) settlements have no clean winner; color by P&L sign.
+    const resultClass = r.result === 'scalar'
+        ? ((r.net_pnl || 0) > 0 ? 'pos' : 'neg')
+        : (r.result === 'yes' ? 'pos' : 'neg');
     const pnlClass = (r.net_pnl || 0) >= 0 ? 'pos' : 'neg';
     const hasEdge = (typeof r.edge_pct === 'number') ||
                     ((typeof r.expected_profit === 'number') && (r.stake || 0) > 0);
@@ -880,8 +883,10 @@ function render(data) {
   settledBody.innerHTML = '';
   (data.settled || []).slice().reverse().slice(0, 100).forEach(r => {
     const tr = document.createElement('tr');
+    // Scalar (fractional) settlements have no clean winner; color by P&L sign.
+    const isScalar = r.result === 'scalar';
     const won = r.result === r.side;
-    const resultClass = won ? 'pos' : 'neg';
+    const resultClass = isScalar ? ((r.net_pnl || 0) > 0 ? 'pos' : 'neg') : (won ? 'pos' : 'neg');
     const pnlClass = (r.net_pnl || 0) >= 0 ? 'pos' : 'neg';
     const edgePct = (typeof r.edge_pct === 'number')
         ? r.edge_pct
@@ -913,7 +918,7 @@ function render(data) {
         '<td class="mono">' + ((r.avg_fill_price || 0) * 100).toFixed(1) + '¢</td>' +
         '<td class="mono">' + (r.shares || 0).toLocaleString() + '</td>' +
         '<td class="mono">' + money(r.stake) + '</td>' +
-        '<td class="' + resultClass + '">' + (won ? 'WIN' : 'LOSS') + '</td>' +
+        '<td class="' + resultClass + '">' + (isScalar ? 'SCALAR' : (won ? 'WIN' : 'LOSS')) + '</td>' +
         '<td class="mono ' + pnlClass + '">' + money(r.net_pnl || 0) + '</td>' +
         '<td class="mono muted">' + fmtPoll(r) + '</td>';
     settledBody.appendChild(tr);

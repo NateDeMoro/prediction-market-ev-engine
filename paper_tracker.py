@@ -905,23 +905,33 @@ def _settle_one(record):
     except Exception as e:
         print(f"[paper_tracker] settlement fetch failed {book}:{market_id}: {e}")
         return None
-    if result not in ("yes", "no"):
+    # Binary markets return "yes"/"no"; scalar markets return a float YES-payout.
+    is_scalar = isinstance(result, float)
+    if not is_scalar and result not in ("yes", "no"):
         return None
 
     shares = record["shares"]
     avg_fill = record["avg_fill_price"]
     total_stake = record.get("stake", 0.0)
 
-    # NO contracts win when the underlying settles "no"; YES contracts win
-    # when it settles "yes". Winning contracts always pay $1/share minus fee.
-    won = (result == side)
-    if won:
+    if is_scalar:
+        # Scalar resolution: each YES share pays `result`, each NO share pays
+        # 1-result. Fee is upfront (fee_on_win=0), so payout is the full share.
         fee_on_win = adapter.fee_on_win_per_share(avg_fill)
-        gross_return = shares * (1.0 - fee_on_win)
+        my_payout = result if side == "yes" else 1.0 - result
+        gross_return = shares * my_payout * (1.0 - fee_on_win)
         net_pnl = gross_return - total_stake
     else:
-        gross_return = 0.0
-        net_pnl = -total_stake
+        # NO contracts win when the underlying settles "no"; YES contracts win
+        # when it settles "yes". Winning contracts always pay $1/share minus fee.
+        won = (result == side)
+        if won:
+            fee_on_win = adapter.fee_on_win_per_share(avg_fill)
+            gross_return = shares * (1.0 - fee_on_win)
+            net_pnl = gross_return - total_stake
+        else:
+            gross_return = 0.0
+            net_pnl = -total_stake
 
     key = _key(book, market_id, side)
     global _bankroll
@@ -945,7 +955,7 @@ def _settle_one(record):
             "line": record.get("line"),
             "selection": record.get("selection"),
             "yes_side_label": record.get("yes_side_label"),
-            "result": result,
+            "result": "scalar" if is_scalar else result,
             "shares": shares,
             "stake": total_stake,
             "avg_fill_price": avg_fill,
@@ -956,6 +966,8 @@ def _settle_one(record):
             "net_pnl": round(net_pnl, 4),
             "bankroll_after": round(_bankroll, 4),
         }
+        if is_scalar:
+            settlement["settlement_value"] = round(my_payout, 4)
         close = _closes_by_key.get(key)
         if close is not None:
             fpc = close.get("fair_prob_close")
@@ -1005,8 +1017,11 @@ def snapshot():
 
     total_placed = len(_placements)
     total_settled = len(settled)
-    wins = sum(1 for s in settled if s.get("result") == "yes")
-    losses = sum(1 for s in settled if s.get("result") == "no")
+    # Scalar (fractional) settlements have no clean winner; classify by P&L sign.
+    wins = sum(1 for s in settled if s.get("result") == "yes"
+               or (s.get("result") == "scalar" and (s.get("net_pnl") or 0.0) > 0))
+    losses = sum(1 for s in settled if s.get("result") == "no"
+                 or (s.get("result") == "scalar" and (s.get("net_pnl") or 0.0) <= 0))
     total_pnl = round(bankroll - config.PAPER_INITIAL_BANKROLL, 4)
     settled_stake = sum(s.get("stake", 0.0) for s in settled)
     settled_pnl = sum(s.get("net_pnl", 0.0) for s in settled)

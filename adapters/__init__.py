@@ -12,7 +12,10 @@ Each adapter module exposes a common duck-typed surface (see
     fetch_both_ladders(market_id) -> (yes_ladder, no_ladder_or_None)
     taker_fee_per_share(price, fair_prob) -> float
     market_url(normalized) -> str
-    fetch_settlement(market_id) -> "yes" | "no" | None
+    fetch_settlement(market_id) -> "yes" | "no" | float | None
+        A float is the YES-side payout (0.0-1.0) for scalar/fractional
+        resolutions (postponed/cancelled games, ties); callers credit
+        side-correct payout * shares. None means not yet resolved.
     parse_moneyline_teams(normalized) -> (team_a, team_b) | None
     event_group_key(normalized) -> str
 
