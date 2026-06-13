@@ -156,9 +156,14 @@ PAGE = """<!doctype html>
          margin-bottom: 12px; font-family: ui-monospace, monospace; font-size: 12px; }
   a { color: #7dd3fc; text-decoration: none; }
   a:hover { text-decoration: underline; }
+  .version { position: fixed; top: 14px; right: 18px; z-index: 10;
+             font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px;
+             color: #9aa3b2; background: #15171c; border: 1px solid #23262d;
+             padding: 3px 8px; border-radius: 4px; }
 </style>
 </head>
 <body>
+  <div class="version">v{{version}}</div>
   <h1>+EV Dashboard <span class="muted" style="font-size:12px;">top {{top_n}} by EV/share, per-book fee model</span></h1>
   <div class="meta"><a href="/">Live EV</a> &nbsp;·&nbsp; <a href="/paper">Paper</a> &nbsp;·&nbsp; <a href="/real">Real Trading</a></div>
   <div class="meta" id="meta">loading…</div>
@@ -452,9 +457,14 @@ PAPER_PAGE = """<!doctype html>
   .book.polymarket { background: #33194d; color: #d8b4fe; }
   a { color: #7dd3fc; text-decoration: none; }
   a:hover { text-decoration: underline; }
+  .version { position: fixed; top: 14px; right: 18px; z-index: 10;
+             font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px;
+             color: #9aa3b2; background: #15171c; border: 1px solid #23262d;
+             padding: 3px 8px; border-radius: 4px; }
 </style>
 </head>
 <body>
+  <div class="version">v{{version}}</div>
   <h1>Paper Tracker <span class="muted" style="font-size:12px;">Kelly 0.25 · $5,000 compounding · per-book fee · min edge 2%</span></h1>
   <div class="meta"><a href="/">Live EV</a> &nbsp;·&nbsp; <a href="/paper">Paper</a> &nbsp;·&nbsp; <a href="/real">Real Trading</a></div>
   <div class="stats" id="stats"></div>
@@ -648,7 +658,7 @@ setInterval(tick, 5000);
 
 @app.route("/")
 def index():
-    return render_template_string(PAGE, top_n=TOP_N)
+    return render_template_string(PAGE, top_n=TOP_N, version=config.APP_VERSION)
 
 
 @app.route("/api/ev")
@@ -659,7 +669,7 @@ def api_ev():
 
 @app.route("/paper")
 def paper_page():
-    return render_template_string(PAPER_PAGE)
+    return render_template_string(PAPER_PAGE, version=config.APP_VERSION)
 
 
 @app.route("/api/paper")
@@ -715,9 +725,14 @@ REAL_PAGE = """<!doctype html>
   .stat-pill.pending_adapter { background: #2a2d34; color: #9aa3b2; }
   a { color: #7dd3fc; text-decoration: none; }
   a:hover { text-decoration: underline; }
+  .version { position: fixed; top: 14px; right: 18px; z-index: 10;
+             font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px;
+             color: #9aa3b2; background: #15171c; border: 1px solid #23262d;
+             padding: 3px 8px; border-radius: 4px; }
 </style>
 </head>
 <body>
+  <div class="version">v{{version}}</div>
   <h1>Real Trading <span class="muted" style="font-size:12px;">Kelly 0.25 · $1,000 combined bankroll · same thresholds as paper · per-bet $30 cap · -$100 daily halt</span></h1>
   <div class="meta"><a href="/">Live EV</a> &nbsp;·&nbsp; <a href="/paper">Paper</a> &nbsp;·&nbsp; <a href="/real">Real Trading</a></div>
   <div id="banner"></div>
@@ -924,7 +939,7 @@ setInterval(tick, 5000);
 
 @app.route("/real")
 def real_page():
-    return render_template_string(REAL_PAGE)
+    return render_template_string(REAL_PAGE, version=config.APP_VERSION)
 
 
 @app.route("/api/real")

@@ -212,6 +212,12 @@ SERIES_TICKER_LEAGUE_PREFIXES = (
     ("KXUCLW", "UCLW"),
     ("KXAFCCL", "AFCCL"),
     ("KXEWSL", "EWSL"),
+    # Men's FIFA World Cup. KXWC* covers KXWCGAME (3-way ML), KXWCSPREAD,
+    # KXWCTOTAL, KXWCTEAMTOTAL, KXWC1HSPREAD/TOTAL. Moneyline is disabled for
+    # Soccer (3-way), so only spread/total/team_total are bet. Prop KXWC* series
+    # (KXWCGOAL, KXWCSHOT, ...) aren't fetched by the poller (no CORE_SUFFIX);
+    # any that slip through fail-close at the matcher with no Pinnacle counterpart.
+    ("KXWC", "WORLDCUP"),
     ("KXCHLLDP", "CHLLDP"),
     ("KXAPFDDH", "APFDDH"),
     ("KXBRASILEIRO", "BRASILEIRAO"),
@@ -320,6 +326,7 @@ LEAGUE_TO_PIN_SPORT = {
     "UCLW":           "Soccer",
     "AFCCL":          "Soccer",
     "EWSL":           "Soccer",
+    "WORLDCUP":       "Soccer",
     "CHLLDP":         "Soccer",
     "APFDDH":         "Soccer",
     "BRASILEIRAO":    "Soccer",
@@ -370,6 +377,8 @@ SHARP_SOCCER_LEAGUES = frozenset({
     # Major-liquidity leagues — Pinnacle carries meaningful two-sided action.
     "EREDIVISIE", "LIGAPORTUGAL", "EFLCHAMPIONSHIP",
     "MLS", "BRASILEIRAO", "LIGAMX", "BELGIANPL", "SCOTTISHPREM", "SAUDIPL",
+    # Men's FIFA World Cup — among the sharpest, highest-limit soccer markets.
+    "WORLDCUP",
 })
 
 

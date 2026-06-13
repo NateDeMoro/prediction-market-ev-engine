@@ -14,6 +14,13 @@ from typing import Optional
 from adapters.common import LEAGUE_TO_PIN_SPORT
 
 # ---------------------------------------------------------------------------
+# 0. Build version — bump by 1 on every commit. Shown top-right in the
+#    dashboard so a restart can be confirmed visually (number changes on deploy).
+# ---------------------------------------------------------------------------
+
+APP_VERSION = 2
+
+# ---------------------------------------------------------------------------
 # 1. Market enablement  (moved verbatim from market_config.py)
 # ---------------------------------------------------------------------------
 
