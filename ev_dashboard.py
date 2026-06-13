@@ -23,10 +23,11 @@ from datetime import datetime, timezone
 from flask import Flask, jsonify, render_template_string
 
 from adapters import adapter_for, all_adapters
-from data_utils import read_latest_snapshot_meta
+from data_utils import read_latest_snapshot_meta, stale_snapshot_reason
 from find_ev_bet import (
     SNAP_PIN,
-    MAX_SNAPSHOT_AGE_SEC,
+    MAX_PIN_SNAPSHOT_AGE_SEC,
+    MAX_SOFT_SNAPSHOT_AGE_SEC,
     american_to_decimal,
     breakeven_fair,
     evaluate,
@@ -83,12 +84,13 @@ def scan_once():
     soft_markets, book_ages = _load_soft_markets()
     if not soft_markets:
         raise RuntimeError("no soft-book snapshots")
-    if pin_age > MAX_SNAPSHOT_AGE_SEC:
-        raise RuntimeError(f"stale pinnacle snapshot pin={pin_age:.0f}s")
-    for book, age in book_ages.items():
-        if age is None or age > MAX_SNAPSHOT_AGE_SEC:
-            age_str = f"{age:.0f}s" if age is not None else "MISSING"
-            raise RuntimeError(f"stale {book} snapshot {age_str}")
+    reason = stale_snapshot_reason(
+        pin_age, book_ages,
+        MAX_PIN_SNAPSHOT_AGE_SEC, MAX_SOFT_SNAPSHOT_AGE_SEC,
+        missing_soft_is_stale=True,
+    )
+    if reason:
+        raise RuntimeError(reason)
 
     pin_meta = read_latest_snapshot_meta(SNAP_PIN)
     pin_poll_sec = (pin_meta or {}).get("cycle_elapsed_sec")

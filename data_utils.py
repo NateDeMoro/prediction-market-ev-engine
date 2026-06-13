@@ -179,6 +179,33 @@ def read_latest_snapshot_meta(dir_path):
         return None
 
 
+def stale_snapshot_reason(pin_age, book_ages, pin_max_age, soft_max_age,
+                          missing_soft_is_stale=False):
+    """Return a human reason string if any snapshot is too old, else None.
+
+    Use when: gating a scan or placement on snapshot freshness. The gate is
+    two-tier by role — `pin_age` (seconds) is the only price-accuracy risk and
+    is gated by the tight `pin_max_age`; each value in `book_ages`
+    (book -> age in seconds, or None when no snapshot exists) is a coverage
+    check gated by the loose `soft_max_age`, because soft-book ladders are
+    re-fetched live at decision time. Pinnacle is checked before the soft
+    books. A soft book with age None is reported stale only when
+    `missing_soft_is_stale` (scan_once treats a missing soft book as fatal;
+    find_ev_bet skips it).
+    """
+    if pin_age is None or pin_age > pin_max_age:
+        shown = "MISSING" if pin_age is None else f"{pin_age:.0f}s"
+        return f"pinnacle snapshot too old ({shown} > {pin_max_age}s)"
+    for book, age in book_ages.items():
+        if age is None:
+            if missing_soft_is_stale:
+                return f"{book} snapshot MISSING"
+            continue
+        if age > soft_max_age:
+            return f"{book} snapshot too old ({age:.0f}s > {soft_max_age}s)"
+    return None
+
+
 def install_shutdown_handlers(flag, logger=None, on_shutdown=None):
     """Install SIGTERM + SIGINT handlers that flip `flag` to False so the
     main loop exits cleanly after its current cycle. `on_shutdown()` (if
