@@ -32,10 +32,13 @@ class _FakeResp:
         return self._payload
 
 
-def _book(state="MARKET_STATE_EXPIRED", settlement_px="1.0000"):
+def _book(state="MARKET_STATE_EXPIRED", settlement_px="1.0000",
+          settlement_set_time="2026-06-13T00:00:00Z"):
     stats = {}
     if settlement_px is not None:
         stats["settlementPx"] = {"value": settlement_px, "currency": "USD"}
+    if settlement_set_time is not None:
+        stats["settlementSetTime"] = settlement_set_time
     return {"state": state, "stats": stats}
 
 
@@ -88,6 +91,15 @@ def test_book_fallback_not_expired_returns_none(monkeypatch):
 def test_book_fallback_missing_px_returns_none(monkeypatch):
     _route_404_then_book(monkeypatch, _book(settlement_px=None))
     assert pm.fetch_settlement("slug:long") is None
+
+
+def test_book_fallback_no_set_time_returns_none(monkeypatch):
+    # Expired but settlementPx still defaulting to 0.0 before the result is
+    # written: without settlementSetTime we must not credit a phantom "no".
+    _route_404_then_book(monkeypatch, _book(settlement_px="0.0000",
+                                            settlement_set_time=None))
+    assert pm.fetch_settlement("slug:long") is None
+    assert pm.fetch_settlement("slug:short") is None
 
 
 def test_bad_market_id_returns_none(monkeypatch):

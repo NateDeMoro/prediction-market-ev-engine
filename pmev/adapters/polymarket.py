@@ -366,11 +366,21 @@ def _settlement_from_book(slug, side):
 
     Returns 'yes'/'no' for a clean 0/1 payout, a scalar float YES-payout for a
     genuinely fractional one (mirroring Kalshi's scalar path; the caller credits
-    the side-correct share), or None if the market has not expired yet."""
+    the side-correct share), or None if the market has not expired yet (or has
+    expired but not yet settled — see the `settlementSetTime` gate below)."""
     md = _fetch_book(slug)
     if (md.get("state") or "") != "MARKET_STATE_EXPIRED":
         return None
-    raw = ((md.get("stats") or {}).get("settlementPx") or {}).get("value")
+    stats = md.get("stats") or {}
+    # A market can briefly read EXPIRED with `settlementPx` defaulting to 0.0
+    # before the result is actually written. Require `settlementSetTime` to be
+    # set so we don't credit a phantom 0.0 ("no") during that window.
+    set_time = stats.get("settlementSetTime")
+    if isinstance(set_time, dict):
+        set_time = set_time.get("value")
+    if not set_time:
+        return None
+    raw = (stats.get("settlementPx") or {}).get("value")
     try:
         long_payout = float(raw)
     except (TypeError, ValueError):
