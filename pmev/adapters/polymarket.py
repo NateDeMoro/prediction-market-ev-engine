@@ -6,10 +6,12 @@ Normalizes Polymarket snapshot rows (one per marketSide) into
 (order book, settlement) behind the adapter surface declared in
 `adapters/__init__.py`.
 
-Scope mirrors Kalshi but is strictly narrower — Polymarket US currently
-publishes only FULL-game moneyline / spread / total, with no half-game
-markets, no team-totals, and no props. The adapter filters in
-`normalize_market` accordingly.
+Scope mirrors Kalshi but is strictly narrower — only FULL-game moneyline /
+spread / total are bet, with no half-game markets, no team-totals, and no
+props. Polymarket DOES publish first-5-innings (F5) baseball period markets
+(slug carries an `f5` token), but `normalize_market` drops them: there is no
+F5 Pinnacle period line in the matcher, so an F5 market would mis-pair against
+the full-game line. The adapter filters all of this in `normalize_market`.
 
 Market-id convention: `"{market_slug}:{long|short}"`. Both sides of a
 Polymarket market share a single book endpoint keyed on the slug; YES-ask
@@ -52,6 +54,15 @@ _TYPE_MAP = {
 }
 
 _SIGNED_LINE_RE = re.compile(r"^([+\-]?\d+(?:\.\d+)?)")
+
+# First-5-innings (F5) baseball period markets are encoded only in the slug as an
+# `f5` token (`tsc-mlb-cin-phi-2026-05-20-f5-6pt5`); their sportsMarketTypeV2 is the
+# same SPORTS_MARKET_TYPE_TOTAL as the full game. We drop them: there is no F5
+# Pinnacle period line wired into the matcher, so an F5 market would normalize as
+# FULL and pair against the full-game line, producing phantom edge (placed F5 bets
+# appear in 1000BetsTracked/paper_trades.jsonl and sanity_rejected.jsonl). Mirrors
+# Kalshi's F5 drop (adapters/kalshi.py `_KALSHI_F5_MARKER`).
+_F5_SLUG_RE = re.compile(r"(?:^|-)f5(?:-|$)", re.IGNORECASE)
 
 
 def _is_half_point(x):
@@ -117,6 +128,9 @@ def normalize_market(raw):
 
     slug = market.get("slug")
     if not slug:
+        return None
+    # Drop F5 (first-5-innings) period markets — see _F5_SLUG_RE above.
+    if _F5_SLUG_RE.search(slug):
         return None
     is_long = bool(side.get("long"))
     market_id = _market_id(slug, is_long)
