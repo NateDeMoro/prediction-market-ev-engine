@@ -45,8 +45,7 @@ HEADERS = {
     "Accept": "application/json",
 }
 
-DIR          = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR     = os.path.join(DIR, "data")
+DATA_DIR     = config.DATA_DIR
 SNAPSHOT_DIR = config.POLYMARKET_SNAPSHOT_DIR
 LOG_PATH     = os.path.join(DATA_DIR, "polymarket.log")
 PID_PATH     = os.path.join(DATA_DIR, "polymarket.pid")

@@ -68,9 +68,8 @@ INCLUDE_PROPS = config.PINNACLE_INCLUDE_PROPS
 PROP_SPORTS = {"Basketball", "Hockey"}
 PROP_LEAGUES = {"NBA", "NHL"}
 
-DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(DIR, "data")
-SNAPSHOT_DIR = os.path.join(DATA_DIR, "snapshots")
+DATA_DIR = config.DATA_DIR
+SNAPSHOT_DIR = config.PIN_SNAPSHOT_DIR
 LOG_PATH = os.path.join(DATA_DIR, "pinnacle.log")
 
 HEADERS = {

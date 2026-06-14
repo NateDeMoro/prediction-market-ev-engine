@@ -50,8 +50,7 @@ DEAD_SERIES_RETRY_AFTER = config.KALSHI_DEAD_SERIES_RETRY_AFTER
 SNAPSHOT_RETENTION     = config.POLLER_SNAPSHOT_RETENTION
 KALSHI_INTER_REQUEST_SLEEP = config.KALSHI_INTER_REQUEST_SLEEP
 
-DIR          = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR     = os.path.join(DIR, "data")
+DATA_DIR     = config.DATA_DIR
 SNAPSHOT_DIR = config.KALSHI_SNAPSHOT_DIR
 LOG_PATH     = os.path.join(DATA_DIR, "kalshi.log")
 
