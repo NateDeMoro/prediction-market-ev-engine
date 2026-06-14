@@ -350,21 +350,58 @@ def fetch_both_ladders(market_id):
     return _short_ask_ladder(bids), _long_ask_ladder(offers)
 
 
-def fetch_settlement(market_id):
-    """Return 'yes' | 'no' | None from Polymarket's per-slug settlement endpoint.
+# A settlementPx within this tolerance of 0/1 is treated as a clean binary
+# resolution; anything strictly between is credited as a scalar (fractional) payout.
+_SETTLEMENT_BINARY_EPS = 1e-3
 
-    Polymarket's `/v1/markets/{slug}/settlement` returns `{slug, settlement}`
-    where `settlement` is the long-side payout (0.0 or 1.0 under normal
-    resolution). A 404 means the market is not yet settled. For short-side
-    positions the payout is inverted.
-    """
+
+def _settlement_from_book(slug, side):
+    """Resolve a market whose result is published only in the order book.
+
+    Cleanly-resolved ("Tier 1") markets answer `/settlement`; fallback-tier
+    ("Tier 3") resolutions — used for suspended/edge-case games, notably the
+    partial-game period markets — never populate that endpoint and instead
+    expose the result in `/book` under `marketData.stats.settlementPx` once
+    `state == "MARKET_STATE_EXPIRED"`.
+
+    Returns 'yes'/'no' for a clean 0/1 payout, a scalar float YES-payout for a
+    genuinely fractional one (mirroring Kalshi's scalar path; the caller credits
+    the side-correct share), or None if the market has not expired yet."""
+    md = _fetch_book(slug)
+    if (md.get("state") or "") != "MARKET_STATE_EXPIRED":
+        return None
+    raw = ((md.get("stats") or {}).get("settlementPx") or {}).get("value")
+    try:
+        long_payout = float(raw)
+    except (TypeError, ValueError):
+        return None
+    long_payout = max(0.0, min(1.0, long_payout))
+    yes_payout = long_payout if side == "long" else 1.0 - long_payout
+    if yes_payout <= _SETTLEMENT_BINARY_EPS:
+        return "no"
+    if yes_payout >= 1.0 - _SETTLEMENT_BINARY_EPS:
+        return "yes"
+    print(f"[polymarket] fractional Tier-3 settlement {slug}:{side} "
+          f"settlementPx={long_payout:.4f} yes_payout={yes_payout:.4f}")
+    return round(yes_payout, 4)
+
+
+def fetch_settlement(market_id):
+    """Return 'yes' | 'no' | float | None from Polymarket settlement.
+
+    Primary source is the per-slug `/v1/markets/{slug}/settlement` endpoint,
+    which returns `{slug, settlement}` with `settlement` the long-side payout
+    (0.0/1.0) for cleanly-resolved markets; short-side payout is inverted. A
+    404 there does NOT mean unsettled — fallback-tier resolutions only show in
+    the order book, so we defer to `_settlement_from_book`. Fail closed (None)
+    if neither source has resolved yet."""
     slug, side = _parse_market_id(market_id)
     if not slug:
         return None
     r = requests.get(f"{GATEWAY}/v1/markets/{slug}/settlement",
                      headers=HEADERS, timeout=REQUEST_TIMEOUT)
     if r.status_code == 404:
-        return None
+        return _settlement_from_book(slug, side)
     r.raise_for_status()
     val = r.json().get("settlement")
     try:
