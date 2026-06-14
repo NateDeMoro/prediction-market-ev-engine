@@ -21,7 +21,7 @@ from .common import (
     resolve_team_abbrev,
     series_ticker_league,
 )
-import config
+from pmev import config
 
 BOOK = "kalshi"
 SUPPORTS_NO_SIDE = True

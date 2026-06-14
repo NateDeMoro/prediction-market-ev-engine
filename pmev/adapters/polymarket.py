@@ -29,7 +29,7 @@ import re
 import requests
 
 from .common import NormalizedMarket
-import config
+from pmev import config
 
 BOOK = "polymarket"
 SUPPORTS_NO_SIDE = True

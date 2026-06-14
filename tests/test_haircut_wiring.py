@@ -14,9 +14,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-import config
-import find_ev_bet
-from devig_utils import devig_multiplicative
+from pmev import config
+from pmev.matching import ev as find_ev_bet
+from pmev.core.devig import devig_multiplicative
 
 ZERO_FEE = lambda price, fair: 0.0
 

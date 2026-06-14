@@ -19,14 +19,14 @@ from datetime import datetime, timezone
 
 from flask import Flask, jsonify, render_template_string
 
-import engine
-from engine import TOP_N
+from pmev import engine
+from pmev.engine import TOP_N
 # Re-exported so imports of these constants from ev_dashboard keep resolving.
-from find_ev_bet import MAX_PIN_SNAPSHOT_AGE_SEC, MAX_SOFT_SNAPSHOT_AGE_SEC
-import data_utils
-import paper_tracker
-import real_tracker
-import config
+from pmev.matching.ev import MAX_PIN_SNAPSHOT_AGE_SEC, MAX_SOFT_SNAPSHOT_AGE_SEC
+from pmev.core import io as data_utils
+from pmev.execution import paper as paper_tracker
+from pmev.execution import real as real_tracker
+from pmev import config
 
 REFRESH_SEC = config.DASHBOARD_REFRESH_SEC
 SCAN_TRIGGER_POLL_SEC = config.SCAN_TRIGGER_POLL_SEC

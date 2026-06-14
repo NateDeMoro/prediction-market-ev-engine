@@ -32,7 +32,7 @@ from pathlib import Path
 import requests
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
-import config
+from pmev import config
 
 BOOK = "kalshi"
 BASE = "https://api.elections.kalshi.com/trade-api/v2"

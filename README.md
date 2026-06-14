@@ -14,20 +14,20 @@ A multi-book +EV scanner for U.S.-legal sports prediction markets. It treats Pin
 
 | Path | Description |
 |------|-------------|
-| `config.py` | Single source of truth for every tunable: market enablement, edge thresholds, fee rates, bankroll/risk caps, timing, feature flags, file paths. |
-| `pinnacle_poller.py` | Sharp-book poller. Pregame + live matchups across active sports every 15s. |
-| `pinnacle_client.py` | Low-level Pinnacle read client shared by the poller and the engine's decision-time re-fetch; `market_to_row` is the canonical snapshot-row schema. |
-| `kalshi_poller.py` | Kalshi sports poller (moneyline, spread, total, team-total, props) inside a 24h window. |
-| `polymarket_poller.py` | Polymarket US poller — full-game moneyline / spread / total only. |
-| `data_utils.py` | Shared poller plumbing: logging, atomic writes, snapshot rotation + `.meta.json` sidecars, SIGTERM/shutdown, cycle pacing, the shared `RateGate` (min-interval spacing + 429 backoff), and snapshot-freshness checks. |
-| `market_matcher.py` | Book-agnostic Pinnacle ↔ soft-book pairing across all market types and periods. |
-| `devig_utils.py` | Multiplicative devigging of 2-way Pinnacle lines. |
-| `find_ev_bet.py` | One-shot CLI that prints the single best +EV opportunity across all books; also owns the shared EV math (`evaluate` / `walk_ladder`) and the match→devig→haircut candidate pipeline. |
-| `engine.py` | Headless scan pipeline (`scan()`): freshness gate → match → live ladder fetch → `evaluate` → rank. Side-effect-free — returns ranked rows plus a `placements` list the caller (dashboard or CLI) acts on. Owns the decision-time Pinnacle re-fetch that re-validates every placement's fair live before betting. |
-| `ev_dashboard.py` | Flask dashboard at `127.0.0.1:5055`. Tabs: Live EV (`/`), Paper (`/paper`), Real Trading (`/real`), each with a `v{APP_VERSION}` badge to confirm a deploy is live. Event-triggered: re-runs `engine.scan()` when a poller writes a new snapshot, then places from the result. A Poll-time column reads each book's sidecar so stale-line decisions trace back to the cycle that produced them. |
-| `paper_tracker.py` | Append-only paper-trading sim: fractional-Kelly sizing, upfront-fee application, settlement polling (incl. Kalshi scalar payouts), CLV close-capture, dual EV-basis reporting, replay. |
-| `real_tracker.py` | Real-money tracker. $1000 bankroll, per-book balances, $30/bet cap, -$100 daily halt, gated on `REAL_TRADING_ENABLED`. |
-| `adapters/` | Per-book normalization, ladder fetch, fee model, and authenticated trade clients (`*_trade.py`). New books drop in here and register in `__init__.py`. |
+| `pmev/config.py` | Single source of truth for every tunable: market enablement, edge thresholds, fee rates, bankroll/risk caps, timing, feature flags, file paths. |
+| `pmev/pollers/pinnacle.py` | Sharp-book poller. Pregame + live matchups across active sports every 15s. |
+| `pmev/core/pinnacle_client.py` | Low-level Pinnacle read client shared by the poller and the engine's decision-time re-fetch; `market_to_row` is the canonical snapshot-row schema. |
+| `pmev/pollers/kalshi.py` | Kalshi sports poller (moneyline, spread, total, team-total, props) inside a 24h window. |
+| `pmev/pollers/polymarket.py` | Polymarket US poller — full-game moneyline / spread / total only. |
+| `pmev/core/io.py` | Shared poller plumbing: logging, atomic writes, snapshot rotation + `.meta.json` sidecars, SIGTERM/shutdown, cycle pacing, the shared `RateGate` (min-interval spacing + 429 backoff), and snapshot-freshness checks. |
+| `pmev/matching/matcher.py` | Book-agnostic Pinnacle ↔ soft-book pairing across all market types and periods. |
+| `pmev/core/devig.py` | Multiplicative devigging of 2-way Pinnacle lines. |
+| `pmev/matching/ev.py` | One-shot CLI (`python3 -m pmev.matching.ev`) that prints the single best +EV opportunity across all books; also owns the shared EV math (`evaluate` / `walk_ladder`) and the match→devig→haircut candidate pipeline. |
+| `pmev/engine.py` | Headless scan pipeline (`scan()`): freshness gate → match → live ladder fetch → `evaluate` → rank. Side-effect-free — returns ranked rows plus a `placements` list the caller (dashboard or CLI) acts on. Owns the decision-time Pinnacle re-fetch that re-validates every placement's fair live before betting. |
+| `pmev/dashboard.py` | Flask dashboard at `127.0.0.1:5055`. Tabs: Live EV (`/`), Paper (`/paper`), Real Trading (`/real`), each with a `v{APP_VERSION}` badge to confirm a deploy is live. Event-triggered: re-runs `engine.scan()` when a poller writes a new snapshot, then places from the result. A Poll-time column reads each book's sidecar so stale-line decisions trace back to the cycle that produced them. |
+| `pmev/execution/paper.py` | Append-only paper-trading sim: fractional-Kelly sizing, upfront-fee application, settlement polling (incl. Kalshi scalar payouts), CLV close-capture, dual EV-basis reporting, replay. |
+| `pmev/execution/real.py` | Real-money tracker. $1000 bankroll, per-book balances, $30/bet cap, -$100 daily halt, gated on `REAL_TRADING_ENABLED`. |
+| `pmev/adapters/` | Per-book normalization, ladder fetch, fee model, and authenticated trade clients (`*_trade.py`). New books drop in here and register in `__init__.py`. |
 | `analysis/` | Bias estimation, simulations, haircut backtests, threshold sweeps, latency planning. |
 | `diagnostics/` | Match-rate audits and miss-debug helpers for spot-checking the matcher. |
 | `1000BetsTracked/` | Static snapshot of paper/real trade history pulled from the VPS, for offline backtesting. |
@@ -38,14 +38,15 @@ A multi-book +EV scanner for U.S.-legal sports prediction markets. It treats Pin
 
 ```bash
 pip3 install requests flask
-cp deploy/env.example .env   # set PINNACLE_API_KEY (required); others optional
-python3 pinnacle_poller.py   # in one shell
-python3 kalshi_poller.py     # in another
-python3 polymarket_poller.py
-python3 ev_dashboard.py      # then open http://127.0.0.1:5055
+cp deploy/env.example .env            # set PINNACLE_API_KEY (required); others optional
+# run from the repo root so the `pmev` package resolves
+python3 -m pmev.pollers.pinnacle      # in one shell
+python3 -m pmev.pollers.kalshi        # in another
+python3 -m pmev.pollers.polymarket
+python3 -m pmev.dashboard             # then open http://127.0.0.1:5055
 ```
 
-`find_ev_bet.py` is a single-shot alternative that prints the top opportunity and exits. Real-money trading additionally requires `KALSHI_*` / `POLYMARKETUS_*` keys and `REAL_TRADING_ENABLED=1`; see `deploy/env.example` for the full variable set.
+`python3 -m pmev.matching.ev` is a single-shot alternative that prints the top opportunity and exits. Real-money trading additionally requires `KALSHI_*` / `POLYMARKETUS_*` keys and `REAL_TRADING_ENABLED=1`; see `deploy/env.example` for the full variable set.
 
 ## Deployment
 

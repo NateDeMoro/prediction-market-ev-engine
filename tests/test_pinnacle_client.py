@@ -40,8 +40,8 @@ def test_market_to_row_parity_with_record_market(monkeypatch):
     # record_market must produce exactly what market_to_row produces (same schema,
     # one source of truth). Pins the drift #4/#8 fought.
     monkeypatch.setenv("PINNACLE_API_KEY", "x")  # poller requires it at import
-    import pinnacle_client
-    import pinnacle_poller
+    from pmev.core import pinnacle_client
+    from pmev.pollers import pinnacle as pinnacle_poller
 
     for market in (MARKET_ML, MARKET_TT):
         snapshot = []
@@ -55,7 +55,7 @@ def test_market_to_row_parity_with_record_market(monkeypatch):
 
 def test_team_total_row_carries_side(monkeypatch):
     monkeypatch.setenv("PINNACLE_API_KEY", "x")
-    import pinnacle_client
+    from pmev.core import pinnacle_client
     row = pinnacle_client.market_to_row(MARKET_TT, MATCHUP, "Basketball", False)
     assert row["side"] == "home"
     assert row["type"] == "team_total"
@@ -66,21 +66,21 @@ def test_team_total_row_carries_side(monkeypatch):
 def test_import_without_key_succeeds(monkeypatch):
     # Lazy key: importing the client with no PINNACLE_API_KEY must not raise.
     monkeypatch.delenv("PINNACLE_API_KEY", raising=False)
-    import pinnacle_client
+    from pmev.core import pinnacle_client
     importlib.reload(pinnacle_client)  # re-executes module top-level; must not raise
 
 
 def test_headers_without_key_raises(monkeypatch):
     # The key is required only when a request is actually built.
     monkeypatch.delenv("PINNACLE_API_KEY", raising=False)
-    import pinnacle_client
+    from pmev.core import pinnacle_client
     with pytest.raises(RuntimeError, match="PINNACLE_API_KEY"):
         pinnacle_client._headers()
 
 
 def test_fetch_goes_through_rate_gate(monkeypatch):
     monkeypatch.setenv("PINNACLE_API_KEY", "x")
-    import pinnacle_client
+    from pmev.core import pinnacle_client
 
     class _FakeGate:
         def __init__(self): self.slots = 0

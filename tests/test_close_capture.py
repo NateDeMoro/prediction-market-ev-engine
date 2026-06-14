@@ -8,9 +8,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-import config
-import paper_tracker as pt
-from devig_utils import devig_multiplicative
+from pmev import config
+from pmev.execution import paper as pt
+from pmev.core.devig import devig_multiplicative
 
 from conftest import (
     pin_total_row, pin_spread_row, pin_prop_row, placement, seed_open, seed_close,
@@ -220,7 +220,7 @@ def test_interpolate_devigs_before_interpolating():
             pin_total_row(line=46.0, over=110, under=-150)]
     devig_interp = _interp(devig_multiplicative([-120, -110])[0],
                            devig_multiplicative([110, -150])[0], 45.0, 46.0, 45.5)
-    from devig_utils import american_to_decimal
+    from pmev.core.devig import american_to_decimal
     raw_interp = _interp(1 / american_to_decimal(-120), 1 / american_to_decimal(110),
                          45.0, 46.0, 45.5)
     got = pt._interpolate_total_fair(rows, rec)
@@ -321,7 +321,7 @@ def test_interpolate_spread_fair_brackets():
 
 def test_interpolate_spread_devigs_before_interpolating():
     # U22a: interpolating devigged fairs differs from interpolating raw implied probs.
-    from devig_utils import american_to_decimal
+    from pmev.core.devig import american_to_decimal
     rec = _spread_rec(line=3.5)
     rows = [pin_spread_row(line=3.0, home=-120, away=-110),
             pin_spread_row(line=4.0, home=110, away=-150)]
@@ -396,7 +396,7 @@ def _seed_real(rt, record):
 
 
 def test_real_uses_shared_capture_with_interpolation(tmp_path, monkeypatch):
-    import real_tracker as rt
+    from pmev.execution import real as rt
     monkeypatch.setattr(config, "REAL_CLOSES_PATH", str(tmp_path / "real_closes.jsonl"))
     rec = placement(market_type="total", line=45.5, start_in_sec=30)
     _seed_real(rt, rec)
@@ -412,7 +412,7 @@ def test_real_uses_shared_capture_with_interpolation(tmp_path, monkeypatch):
 
 
 def test_paper_and_real_capture_identical(tmp_path, monkeypatch):
-    import real_tracker as rt
+    from pmev.execution import real as rt
     monkeypatch.setattr(config, "PAPER_CLOSES_PATH", str(tmp_path / "p.jsonl"))
     monkeypatch.setattr(config, "REAL_CLOSES_PATH", str(tmp_path / "r.jsonl"))
     rec = placement(market_type="total", line=45.5, start_in_sec=30)

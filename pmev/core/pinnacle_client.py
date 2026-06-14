@@ -13,8 +13,8 @@ import os
 
 import requests
 
-from data_utils import RateGate
-import config
+from pmev.core.io import RateGate
+from pmev import config
 
 BASE = "https://guest.api.arcadia.pinnacle.com/0.1"
 REQUEST_TIMEOUT        = config.POLLER_REQUEST_TIMEOUT

@@ -15,13 +15,13 @@ from collections import Counter, defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from adapters import all_adapters, adapter_for
-from adapters.common import (
+from pmev.adapters import all_adapters, adapter_for
+from pmev.adapters.common import (
     COMBO_STATS,
     canonical_stat,
     player_key,
 )
-from market_matcher import (
+from pmev.matching.matcher import (
     match_markets,
     load_pinnacle_props,
     _pinnacle_prop_index,
@@ -151,7 +151,7 @@ def main():
 
         # Pinnacle has props for this matchup. Does it have the player under
         # ANY stat?
-        from adapters.common import fuzzy_match
+        from pmev.adapters.common import fuzzy_match
         same_player_rows = [
             r for r in pin_for_mu
             if fuzzy_match(pkey, r["pkey"]) or fuzzy_match(r["pkey"], pkey)

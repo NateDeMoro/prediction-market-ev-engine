@@ -11,8 +11,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-import ev_dashboard
-from data_utils import latest_snapshot_mtime
+from pmev import dashboard as ev_dashboard
+from pmev.core.io import latest_snapshot_mtime
 
 
 # --- U1a: latest_snapshot_mtime --------------------------------------------

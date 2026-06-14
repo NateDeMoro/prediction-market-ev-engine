@@ -3,7 +3,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import pytest
 
-from data_utils import stale_snapshot_reason
+from pmev.core.io import stale_snapshot_reason
 
 
 # ---------------------------------------------------------------------------
@@ -70,7 +70,7 @@ def test_pin_and_soft_both_stale_pin_wins():
 # Coordination invariants — constants must stay mutually consistent.
 # ---------------------------------------------------------------------------
 
-import config
+from pmev import config
 
 
 def test_pin_cap_tighter_than_soft_cap():
@@ -91,8 +91,8 @@ def test_pinnacle_polls_at_least_as_often_as_soft():
 # ---------------------------------------------------------------------------
 
 def test_constants_resolve_through_reexport_chain():
-    import find_ev_bet
-    import ev_dashboard
+    from pmev.matching import ev as find_ev_bet
+    from pmev import dashboard as ev_dashboard
     assert find_ev_bet.MAX_PIN_SNAPSHOT_AGE_SEC == config.MAX_PIN_SNAPSHOT_AGE_SEC
     assert find_ev_bet.MAX_SOFT_SNAPSHOT_AGE_SEC == config.MAX_SOFT_SNAPSHOT_AGE_SEC
     assert ev_dashboard.MAX_PIN_SNAPSHOT_AGE_SEC == config.MAX_PIN_SNAPSHOT_AGE_SEC
@@ -107,7 +107,7 @@ def test_constants_resolve_through_reexport_chain():
 def _patch_scan(monkeypatch, pin_age, book_ages):
     # The scan pipeline lives in engine.scan (#2); patch its loaders + matcher
     # so the freshness gate is exercised with no live adapter.
-    import engine
+    from pmev import engine
     monkeypatch.setattr(engine, "load_latest_snapshot",
                         lambda _dir: ([{}], pin_age))
     monkeypatch.setattr(engine, "_load_soft_markets",
@@ -141,7 +141,7 @@ def test_age_from_captured_at_beats_mtime(tmp_path):
     # snapshot_age_seconds must trust captured_at over mtime.
     import json, os, time
     from datetime import datetime, timezone, timedelta
-    from data_utils import snapshot_age_seconds
+    from pmev.core.io import snapshot_age_seconds
 
     snap = tmp_path / "20260612T120000Z.jsonl"
     snap.write_text("{}\n")
@@ -156,7 +156,7 @@ def test_age_from_captured_at_beats_mtime(tmp_path):
 
 def test_age_falls_back_to_mtime_without_captured_at(tmp_path):
     import os, time
-    from data_utils import snapshot_age_seconds
+    from pmev.core.io import snapshot_age_seconds
 
     snap = tmp_path / "20260612T120000Z.jsonl"
     snap.write_text("{}\n")

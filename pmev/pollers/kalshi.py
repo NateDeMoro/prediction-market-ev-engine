@@ -25,7 +25,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 import requests
 
-from data_utils import (
+from pmev.core.io import (
     RateGate,
     RunFlag,
     atomic_write_jsonl,
@@ -35,7 +35,7 @@ from data_utils import (
     sleep_until_next_cycle,
     write_snapshot_meta,
 )
-import config
+from pmev import config
 
 BASE = "https://api.elections.kalshi.com/trade-api/v2"
 

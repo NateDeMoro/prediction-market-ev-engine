@@ -2,7 +2,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import pytest
-from devig_utils import american_to_decimal, devig_multiplicative
+from pmev.core.devig import american_to_decimal, devig_multiplicative
 
 
 # Group 1 — New guard: 0 < a < 100 returns None

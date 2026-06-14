@@ -4,9 +4,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import types
 import pytest
 
-import config
-from devig_utils import devig_multiplicative
-import engine
+from pmev import config
+from pmev.core.devig import devig_multiplicative
+from pmev import engine
 
 
 def test_scan_places_with_live_refetched_fair(monkeypatch):

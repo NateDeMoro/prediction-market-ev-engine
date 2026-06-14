@@ -23,9 +23,9 @@ from statistics import mean
 DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, DIR)
 
-from adapters import adapter_for
-import paper_tracker as pt
-import config
+from pmev.adapters import adapter_for
+from pmev.execution import paper as pt
+from pmev import config
 
 DATA_DIR = os.path.join(DIR, "data")
 TRADES = os.path.join(DATA_DIR, "paper_trades.jsonl")

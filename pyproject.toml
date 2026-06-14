@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pmev"
+version = "0.1.0"
+description = "Multi-book +EV scanner (Pinnacle-devigged) for Kalshi and Polymarket."
+requires-python = ">=3.9"
+
+[tool.setuptools]
+packages = [
+    "pmev",
+    "pmev.core",
+    "pmev.matching",
+    "pmev.pollers",
+    "pmev.execution",
+    "pmev.adapters",
+]

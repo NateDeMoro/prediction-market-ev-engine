@@ -12,9 +12,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-import engine
-import paper_tracker
-import real_tracker
+from pmev import engine
+from pmev.execution import paper as paper_tracker
+from pmev.execution import real as real_tracker
 
 
 def _nm(book="kalshi", market_id="KX-1"):

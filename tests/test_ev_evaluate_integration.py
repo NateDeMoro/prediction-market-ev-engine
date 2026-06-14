@@ -4,8 +4,8 @@ Verifies that a candidate with ev_pct above SANITY_MAX_EDGE_PCT is rejected
 by both the find_ev_bet inner loop and the ev_dashboard inner loop (via evaluate()).
 Before the refactor the CLI path had no ceiling and would have accepted it.
 """
-import config
-from find_ev_bet import evaluate, walk_ladder
+from pmev import config
+from pmev.matching.ev import evaluate, walk_ladder
 
 ZERO_FEE = lambda price, fair: 0.0
 

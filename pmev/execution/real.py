@@ -38,9 +38,9 @@ import traceback
 import uuid
 from datetime import datetime, timezone
 
-import paper_tracker as pt
-import config
-from adapters import adapter_for, kalshi_trade, polymarket_trade
+from pmev.execution import paper as pt
+from pmev import config
+from pmev.adapters import adapter_for, kalshi_trade, polymarket_trade
 
 _TRADE_ADAPTERS = {
     "kalshi": kalshi_trade,
@@ -354,7 +354,7 @@ def _place_polymarket_order(record):
     """Send a real limit order to Polymarket US. Translates the (market_id,
     side) pair from our internal {slug}:{long|short} convention into the
     Polymarket API's (slug, outcomeSide) form."""
-    from adapters.polymarket import _parse_market_id
+    from pmev.adapters.polymarket import _parse_market_id
     market_id = record["market_id"]
     side = record["side"]
     count = record["shares"]
@@ -642,7 +642,7 @@ def _poll_open_orders_once():
         # reconciling balance. Kalshi already returns price in the side bought.
         if (book == "polymarket" and isinstance(avg_px, (int, float))
                 and avg_px > 0):
-            from adapters.polymarket import _parse_market_id
+            from pmev.adapters.polymarket import _parse_market_id
             slug, long_or_short = _parse_market_id(record["market_id"])
             if slug:
                 is_long = (long_or_short == "long")

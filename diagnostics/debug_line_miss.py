@@ -11,9 +11,9 @@ from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from adapters import all_adapters, adapter_for
-from adapters.common import COMBO_STATS, canonical_stat, player_key, fuzzy_match
-from market_matcher import (
+from pmev.adapters import all_adapters, adapter_for
+from pmev.adapters.common import COMBO_STATS, canonical_stat, player_key, fuzzy_match
+from pmev.matching.matcher import (
     match_markets,
     load_pinnacle_props,
     _pinnacle_prop_index,

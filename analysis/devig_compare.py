@@ -35,7 +35,7 @@ from statistics import mean
 DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, DIR)
 
-from devig_utils import devig_multiplicative, devig_power, devig_shin
+from pmev.core.devig import devig_multiplicative, devig_power, devig_shin
 
 DATA_DIR = os.path.join(DIR, os.getenv("DATA", "1000BetsTracked"))
 CLOSES = os.path.join(DATA_DIR, "paper_closes.jsonl")

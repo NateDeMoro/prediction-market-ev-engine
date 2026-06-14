@@ -11,14 +11,14 @@ adapters/common.py to avoid inverting the import dependency.
 import os
 from typing import Optional
 
-from adapters.common import LEAGUE_TO_PIN_SPORT
+from pmev.adapters.common import LEAGUE_TO_PIN_SPORT
 
 # ---------------------------------------------------------------------------
 # 0. Build version — bump by 1 on every commit. Shown top-right in the
 #    dashboard so a restart can be confirmed visually (number changes on deploy).
 # ---------------------------------------------------------------------------
 
-APP_VERSION = 5
+APP_VERSION = 6
 
 # ---------------------------------------------------------------------------
 # 1. Market enablement  (moved verbatim from market_config.py)
@@ -425,7 +425,8 @@ EV_DASHBOARD_HOST      = os.environ.get("EV_DASHBOARD_HOST", "127.0.0.1")
 # 6. Paths
 # ---------------------------------------------------------------------------
 
-_DIR     = os.path.dirname(os.path.abspath(__file__))
+# Repo root is the parent of the pmev/ package dir; keep data/ at the root.
+_DIR     = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(_DIR, "data")
 
 # Pinnacle snapshots (read by find_ev_bet and paper_tracker's close-capture loop).

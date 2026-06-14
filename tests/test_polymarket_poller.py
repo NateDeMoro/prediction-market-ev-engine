@@ -6,8 +6,8 @@ import pytest
 from unittest.mock import patch, Mock, call
 import requests
 
-import polymarket_poller
-from data_utils import RateGate
+from pmev.pollers import polymarket as polymarket_poller
+from pmev.core.io import RateGate
 
 SAMPLE_URL = f"{polymarket_poller.GATEWAY}/v2/leagues/nba/events"
 
@@ -47,7 +47,7 @@ class TestGetSlotClaim:
         """_gate.claim_slot() called once per get() call."""
         mock_gate = Mock()
         with patch.object(polymarket_poller, "_gate", mock_gate):
-            with patch("polymarket_poller.requests.get", return_value=_ok_response()):
+            with patch("pmev.pollers.polymarket.requests.get", return_value=_ok_response()):
                 polymarket_poller.get(SAMPLE_URL)
         mock_gate.claim_slot.assert_called_once()
 
@@ -56,7 +56,7 @@ class TestGetSlotClaim:
         body = {"events": [{"id": "x"}]}
         mock_gate = Mock()
         with patch.object(polymarket_poller, "_gate", mock_gate):
-            with patch("polymarket_poller.requests.get", return_value=_ok_response(body)):
+            with patch("pmev.pollers.polymarket.requests.get", return_value=_ok_response(body)):
                 result = polymarket_poller.get(SAMPLE_URL)
         assert result == body
 
@@ -71,7 +71,7 @@ class TestRetryLogic:
         responses = iter([_429_response(retry_after=5), _ok_response()])
         mock_gate = Mock()
         with patch.object(polymarket_poller, "_gate", mock_gate):
-            with patch("polymarket_poller.requests.get", side_effect=responses):
+            with patch("pmev.pollers.polymarket.requests.get", side_effect=responses):
                 polymarket_poller.get(SAMPLE_URL)
         mock_gate.record_429.assert_called_once_with(5.0)
 
@@ -81,7 +81,7 @@ class TestRetryLogic:
         responses = iter([_429_response(retry_after=None), _ok_response()])
         mock_gate = Mock()
         with patch.object(polymarket_poller, "_gate", mock_gate):
-            with patch("polymarket_poller.requests.get", side_effect=responses):
+            with patch("pmev.pollers.polymarket.requests.get", side_effect=responses):
                 polymarket_poller.get(SAMPLE_URL)
         mock_gate.record_429.assert_called_once_with(expected_backoff)
 
@@ -91,7 +91,7 @@ class TestRetryLogic:
         responses = iter([_429_response(), _ok_response(body)])
         mock_gate = Mock()
         with patch.object(polymarket_poller, "_gate", mock_gate):
-            with patch("polymarket_poller.requests.get", side_effect=responses):
+            with patch("pmev.pollers.polymarket.requests.get", side_effect=responses):
                 result = polymarket_poller.get(SAMPLE_URL)
         assert result == body
         assert mock_gate.claim_slot.call_count == 2
@@ -102,7 +102,7 @@ class TestRetryLogic:
         responses = iter([_429_response()] * n)
         mock_gate = Mock()
         with patch.object(polymarket_poller, "_gate", mock_gate):
-            with patch("polymarket_poller.requests.get", side_effect=responses):
+            with patch("pmev.pollers.polymarket.requests.get", side_effect=responses):
                 with pytest.raises(requests.HTTPError):
                     polymarket_poller.get(SAMPLE_URL)
 
@@ -115,14 +115,14 @@ class TestFetchLeagueEvents404:
     def test_c1_404_returns_empty_list(self):
         """HTTP 404 from get() is caught and returns []."""
         r = _http_error_response(404)
-        with patch("polymarket_poller.get", side_effect=requests.HTTPError(response=r)):
+        with patch("pmev.pollers.polymarket.get", side_effect=requests.HTTPError(response=r)):
             result = polymarket_poller.fetch_league_events("nba")
         assert result == []
 
     def test_c2_non_404_error_propagates(self):
         """Non-404 HTTP errors are not swallowed by fetch_league_events."""
         r = _http_error_response(503)
-        with patch("polymarket_poller.get", side_effect=requests.HTTPError(response=r)):
+        with patch("pmev.pollers.polymarket.get", side_effect=requests.HTTPError(response=r)):
             with pytest.raises(requests.HTTPError):
                 polymarket_poller.fetch_league_events("nba")
 
@@ -139,8 +139,8 @@ def _all_ok_mock():
 class TestSnapshotOnceCounter:
     def _run_snapshot_once(self, tmp_path, req_side_effect):
         with patch.object(polymarket_poller, "SNAPSHOT_DIR", str(tmp_path)):
-            with patch("polymarket_poller.requests.get", side_effect=req_side_effect):
-                with patch("polymarket_poller._log"):
+            with patch("pmev.pollers.polymarket.requests.get", side_effect=req_side_effect):
+                with patch("pmev.pollers.polymarket._log"):
                     polymarket_poller.snapshot_once()
         # Read the sidecar written to tmp_path
         sidecars = list(tmp_path.glob("*.meta.json"))
@@ -188,6 +188,6 @@ class TestSnapshotOnceCounter:
 
 class TestGateInstantiation:
     def test_e1_gate_is_rategate_at_import(self):
-        """polymarket_poller._gate is a RateGate instance at import time."""
+        """pmev.pollers.polymarket._gate is a RateGate instance at import time."""
         assert hasattr(polymarket_poller, "_gate")
         assert isinstance(polymarket_poller._gate, RateGate)

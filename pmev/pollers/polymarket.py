@@ -26,8 +26,8 @@ from datetime import datetime, timezone
 
 import requests
 
-from data_utils import RateGate, atomic_write_jsonl, make_logger, prune_snapshots, write_snapshot_meta
-import config
+from pmev.core.io import RateGate, atomic_write_jsonl, make_logger, prune_snapshots, write_snapshot_meta
+from pmev import config
 
 GATEWAY = "https://gateway.polymarket.us"
 LEAGUES = ("nba", "nhl", "mlb", "nfl", "wnba", "ncaaf", "ncaab")

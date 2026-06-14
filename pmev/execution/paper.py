@@ -36,10 +36,10 @@ import time
 import traceback
 from datetime import datetime, timezone
 
-from adapters import adapter_for
-from adapters.common import fuzzy_match
-from devig_utils import devig_multiplicative, synthesize_combined_american
-import config
+from pmev.adapters import adapter_for
+from pmev.adapters.common import fuzzy_match
+from pmev.core.devig import devig_multiplicative, synthesize_combined_american
+from pmev import config
 
 PIN_PERIOD_LABEL_TO_INT = {"FULL": 0, "1H": 1, "2H": 2}
 

@@ -31,7 +31,7 @@ import uuid
 
 import requests
 from cryptography.hazmat.primitives.asymmetric import ed25519
-import config
+from pmev import config
 
 BOOK = "polymarket"
 BASE = "https://api.polymarket.us"

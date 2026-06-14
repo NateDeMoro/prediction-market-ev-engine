@@ -16,9 +16,9 @@ normalized row shape declared in `adapters/common.py`.
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from adapters import adapter_for
-from devig_utils import synthesize_combined_american
-from adapters.common import (
+from pmev.adapters import adapter_for
+from pmev.core.devig import synthesize_combined_american
+from pmev.adapters.common import (
     COMBO_STATS,
     NormalizedMarket,
     canonical_stat,
@@ -29,7 +29,7 @@ from adapters.common import (
     soccer_league_whitelisted,
     team_in_league,
 )
-from config import market_enabled
+from pmev.config import market_enabled
 
 PIN_PERIOD_LABEL = {0: "FULL", 1: "1H", 2: "2H"}
 PERIOD_LABEL_TO_INT = {v: k for k, v in PIN_PERIOD_LABEL.items()}

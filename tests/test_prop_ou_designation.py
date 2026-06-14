@@ -7,9 +7,9 @@ os.environ.setdefault("PINNACLE_API_KEY", "test-key")
 from unittest.mock import patch
 import pytest
 
-import pinnacle_poller
-from market_matcher import _find_prop_prices
-from paper_tracker import _find_pin_prices
+from pmev.pollers import pinnacle as pinnacle_poller
+from pmev.matching.matcher import _find_prop_prices
+from pmev.execution.paper import _find_pin_prices
 
 
 # ---------------------------------------------------------------------------

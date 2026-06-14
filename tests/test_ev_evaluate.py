@@ -6,8 +6,8 @@ the real fee rate from config.PER_BOOK_FEE_RATE, which is intentional: it lets u
 that evaluate() calls the config formula rather than re-implementing it.
 """
 import pytest
-import config
-from find_ev_bet import evaluate
+from pmev import config
+from pmev.matching.ev import evaluate
 
 ZERO_FEE = lambda price, fair: 0.0
 BOOK = "kalshi"

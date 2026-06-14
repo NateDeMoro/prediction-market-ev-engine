@@ -8,10 +8,10 @@ from datetime import timezone, timedelta
 import pytest
 from unittest.mock import patch
 
-import pinnacle_poller
-import kalshi_poller
-import polymarket_poller
-import data_utils
+from pmev.pollers import pinnacle as pinnacle_poller
+from pmev.pollers import kalshi as kalshi_poller
+from pmev.pollers import polymarket as polymarket_poller
+from pmev.core import io as data_utils
 
 # Two fixed timestamps: cycle-start and write-time (15s later).
 T_START = _dt_module.datetime(2026, 6, 12, 12, 34, 0, tzinfo=timezone.utc)
@@ -113,12 +113,12 @@ def test_pinnacle_filename_uses_write_time(tmp_path):
     start = T_START + timedelta(hours=1)
     FakeDate = _fake_datetime(T_START, T_WRITE)
 
-    with patch("pinnacle_poller.fetch_sports", return_value=[{"id": 1, "name": "Soccer", "matchupCount": 1}]), \
-         patch("pinnacle_poller.fetch_raw_matchups", return_value=[_pin_matchup(start)]), \
-         patch("pinnacle_poller.fetch_bulk_markets", return_value=[_pin_market()]), \
-         patch("pinnacle_poller.SNAPSHOT_DIR", str(tmp_path)), \
-         patch("pinnacle_poller.log", lambda msg: None), \
-         patch("pinnacle_poller.datetime", FakeDate):
+    with patch("pmev.pollers.pinnacle.fetch_sports", return_value=[{"id": 1, "name": "Soccer", "matchupCount": 1}]), \
+         patch("pmev.pollers.pinnacle.fetch_raw_matchups", return_value=[_pin_matchup(start)]), \
+         patch("pmev.pollers.pinnacle.fetch_bulk_markets", return_value=[_pin_market()]), \
+         patch("pmev.pollers.pinnacle.SNAPSHOT_DIR", str(tmp_path)), \
+         patch("pmev.pollers.pinnacle.log", lambda msg: None), \
+         patch("pmev.pollers.pinnacle.datetime", FakeDate):
         pinnacle_poller.run_cycle({})
 
     files = list(tmp_path.glob("*.jsonl"))
@@ -134,10 +134,10 @@ def test_kalshi_filename_uses_write_time(tmp_path):
     """Kalshi snap path filename stem must equal T_WRITE (second datetime.now call)."""
     FakeDate = _fake_datetime(T_START, T_WRITE)
 
-    with patch("kalshi_poller.fetch_markets_for_series", return_value=[_kalshi_market()]), \
-         patch("kalshi_poller.SNAPSHOT_DIR", str(tmp_path)), \
-         patch("kalshi_poller.log", lambda msg: None), \
-         patch("kalshi_poller.datetime", FakeDate):
+    with patch("pmev.pollers.kalshi.fetch_markets_for_series", return_value=[_kalshi_market()]), \
+         patch("pmev.pollers.kalshi.SNAPSHOT_DIR", str(tmp_path)), \
+         patch("pmev.pollers.kalshi.log", lambda msg: None), \
+         patch("pmev.pollers.kalshi.datetime", FakeDate):
         kalshi_poller.run_cycle({}, [{"ticker": "KXNBA-GAME"}], {}, 1)
 
     files = list(tmp_path.glob("*.jsonl"))
@@ -153,10 +153,10 @@ def test_polymarket_filename_uses_write_time(tmp_path):
     """Polymarket snapshot_once filename stem must equal the write-time datetime.now call."""
     FakeDate = _fake_datetime(T_WRITE)
 
-    with patch("polymarket_poller.fetch_league_events", return_value=[_poly_event()]), \
-         patch("polymarket_poller.SNAPSHOT_DIR", str(tmp_path)), \
-         patch("polymarket_poller._log", lambda msg: None), \
-         patch("polymarket_poller.datetime", FakeDate):
+    with patch("pmev.pollers.polymarket.fetch_league_events", return_value=[_poly_event()]), \
+         patch("pmev.pollers.polymarket.SNAPSHOT_DIR", str(tmp_path)), \
+         patch("pmev.pollers.polymarket._log", lambda msg: None), \
+         patch("pmev.pollers.polymarket.datetime", FakeDate):
         polymarket_poller.snapshot_once()
 
     files = list(tmp_path.glob("*.jsonl"))
@@ -191,12 +191,12 @@ def test_pinnacle_sidecar_has_captured_at(tmp_path):
     """The .meta.json sidecar carries captured_at == write-time ISO."""
     start = T_START + timedelta(hours=1)
     FakeDate = _fake_datetime(T_START, T_WRITE)
-    with patch("pinnacle_poller.fetch_sports", return_value=[{"id": 1, "name": "Soccer", "matchupCount": 1}]), \
-         patch("pinnacle_poller.fetch_raw_matchups", return_value=[_pin_matchup(start)]), \
-         patch("pinnacle_poller.fetch_bulk_markets", return_value=[_pin_market()]), \
-         patch("pinnacle_poller.SNAPSHOT_DIR", str(tmp_path)), \
-         patch("pinnacle_poller.log", lambda msg: None), \
-         patch("pinnacle_poller.datetime", FakeDate):
+    with patch("pmev.pollers.pinnacle.fetch_sports", return_value=[{"id": 1, "name": "Soccer", "matchupCount": 1}]), \
+         patch("pmev.pollers.pinnacle.fetch_raw_matchups", return_value=[_pin_matchup(start)]), \
+         patch("pmev.pollers.pinnacle.fetch_bulk_markets", return_value=[_pin_market()]), \
+         patch("pmev.pollers.pinnacle.SNAPSHOT_DIR", str(tmp_path)), \
+         patch("pmev.pollers.pinnacle.log", lambda msg: None), \
+         patch("pmev.pollers.pinnacle.datetime", FakeDate):
         pinnacle_poller.run_cycle({})
 
     assert _read_one_meta(tmp_path).get("captured_at") == T_WRITE.isoformat()
@@ -206,12 +206,12 @@ def test_pinnacle_rows_have_captured_at(tmp_path):
     """Every snapshot row carries captured_at == write-time ISO (fresh fetch)."""
     start = T_START + timedelta(hours=1)
     FakeDate = _fake_datetime(T_START, T_WRITE)
-    with patch("pinnacle_poller.fetch_sports", return_value=[{"id": 1, "name": "Soccer", "matchupCount": 1}]), \
-         patch("pinnacle_poller.fetch_raw_matchups", return_value=[_pin_matchup(start)]), \
-         patch("pinnacle_poller.fetch_bulk_markets", return_value=[_pin_market()]), \
-         patch("pinnacle_poller.SNAPSHOT_DIR", str(tmp_path)), \
-         patch("pinnacle_poller.log", lambda msg: None), \
-         patch("pinnacle_poller.datetime", FakeDate):
+    with patch("pmev.pollers.pinnacle.fetch_sports", return_value=[{"id": 1, "name": "Soccer", "matchupCount": 1}]), \
+         patch("pmev.pollers.pinnacle.fetch_raw_matchups", return_value=[_pin_matchup(start)]), \
+         patch("pmev.pollers.pinnacle.fetch_bulk_markets", return_value=[_pin_market()]), \
+         patch("pmev.pollers.pinnacle.SNAPSHOT_DIR", str(tmp_path)), \
+         patch("pmev.pollers.pinnacle.log", lambda msg: None), \
+         patch("pmev.pollers.pinnacle.datetime", FakeDate):
         pinnacle_poller.run_cycle({})
 
     rows = _read_one_jsonl(tmp_path)
@@ -283,12 +283,12 @@ def test_pinnacle_window_filtering_uses_cycle_start(tmp_path):
     past_start = T_START - timedelta(hours=1)
     FakeDate = _fake_datetime(T_START, T_WRITE)
 
-    with patch("pinnacle_poller.fetch_sports", return_value=[{"id": 1, "name": "Soccer", "matchupCount": 1}]), \
-         patch("pinnacle_poller.fetch_raw_matchups", return_value=[_pin_matchup(past_start)]), \
-         patch("pinnacle_poller.fetch_bulk_markets", return_value=[_pin_market()]), \
-         patch("pinnacle_poller.SNAPSHOT_DIR", str(tmp_path)), \
-         patch("pinnacle_poller.log", lambda msg: None), \
-         patch("pinnacle_poller.datetime", FakeDate):
+    with patch("pmev.pollers.pinnacle.fetch_sports", return_value=[{"id": 1, "name": "Soccer", "matchupCount": 1}]), \
+         patch("pmev.pollers.pinnacle.fetch_raw_matchups", return_value=[_pin_matchup(past_start)]), \
+         patch("pmev.pollers.pinnacle.fetch_bulk_markets", return_value=[_pin_market()]), \
+         patch("pmev.pollers.pinnacle.SNAPSHOT_DIR", str(tmp_path)), \
+         patch("pmev.pollers.pinnacle.log", lambda msg: None), \
+         patch("pmev.pollers.pinnacle.datetime", FakeDate):
         pinnacle_poller.run_cycle({})
 
     # Out-of-window matchup produces no snapshot file

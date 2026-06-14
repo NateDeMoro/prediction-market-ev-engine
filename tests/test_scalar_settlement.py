@@ -20,10 +20,10 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-import config
-import paper_tracker as pt
-import real_tracker as rt
-from adapters import kalshi
+from pmev import config
+from pmev.execution import paper as pt
+from pmev.execution import real as rt
+from pmev.adapters import kalshi
 
 
 class _FakeResp:

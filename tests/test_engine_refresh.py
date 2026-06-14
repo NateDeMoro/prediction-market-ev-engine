@@ -3,9 +3,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import pytest
 
-import config
-from devig_utils import devig_multiplicative
-import engine
+from pmev import config
+from pmev.core.devig import devig_multiplicative
+from pmev import engine
 
 
 # ---------------------------------------------------------------------------
@@ -218,7 +218,7 @@ def test_scan_refresh_scoped_to_in_window(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_paper_record_carries_fair_refreshed(monkeypatch):
-    import paper_tracker as pt
+    from pmev.execution import paper as pt
 
     captured = {}
     monkeypatch.setattr(pt, "_bankroll", 1000.0)

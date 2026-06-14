@@ -19,7 +19,7 @@ from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from adapters.common import (
+from pmev.adapters.common import (
     LEAGUE_TO_PIN_SPORT,
     SERIES_TICKER_LEAGUE_PREFIXES,
     series_ticker_league,

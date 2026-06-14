@@ -6,7 +6,7 @@ import pytest
 from unittest.mock import patch, Mock
 import requests
 
-import polymarket_poller
+from pmev.pollers import polymarket as polymarket_poller
 
 LEAGUES = polymarket_poller.LEAGUES
 
@@ -48,8 +48,8 @@ def test_retry_on_429_delivers_league_to_snapshot(tmp_path):
         return _ok_response()
 
     with patch.object(polymarket_poller, "SNAPSHOT_DIR", str(tmp_path)):
-        with patch("polymarket_poller.requests.get", side_effect=side_effect):
-            with patch("polymarket_poller._log"):
+        with patch("pmev.pollers.polymarket.requests.get", side_effect=side_effect):
+            with patch("pmev.pollers.polymarket._log"):
                 polymarket_poller.snapshot_once()
 
     # Sidecar must exist and show the real 429 count.

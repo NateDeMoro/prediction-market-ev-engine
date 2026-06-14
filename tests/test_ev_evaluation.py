@@ -2,8 +2,8 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import pytest
-import config
-from find_ev_bet import evaluate, walk_ladder
+from pmev import config
+from pmev.matching.ev import evaluate, walk_ladder
 
 # Synthetic single-level ladder: 100 shares at 45¢
 # With zero_fee:

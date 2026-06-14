@@ -17,8 +17,8 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from adapters import all_adapters
-from market_matcher import match_all_markets
+from pmev.adapters import all_adapters
+from pmev.matching.matcher import match_all_markets
 
 DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SNAP_PIN = os.path.join(DIR, "data", "snapshots")

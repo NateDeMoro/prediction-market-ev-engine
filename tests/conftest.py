@@ -16,8 +16,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-import config
-import paper_tracker as pt
+from pmev import config
+from pmev.execution import paper as pt
 
 
 @pytest.fixture
