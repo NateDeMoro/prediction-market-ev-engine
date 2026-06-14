@@ -385,6 +385,11 @@ def maybe_place(row, ladder, now=None):
         "opposite_designation": row.get("opposite_designation"),
         "fair_prob": row.get("fair_prob"),
         "fair_prob_raw": row.get("fair_prob_raw"),
+        # Refreshed two-sided Pinnacle line the placement fair was devigged from,
+        # so an alternate-devig (power/Shin) backtest can replay the exact line.
+        # None when the fair was interpolated (no clean price pair).
+        "yes_pin_price_used": row.get("yes_pin_price_used"),
+        "opposite_pin_price_used": row.get("opposite_pin_price_used"),
         # #6b: provenance of the fair this bet was placed on — True when re-fetched
         # live at decision, with the snapshot->live shift. Lets CLV/tracking grade
         # only fully-fresh placements and pins the regression.
@@ -1029,8 +1034,10 @@ def snapshot():
     # Pinnacle close) so the two headline numbers are directly comparable — same
     # bets, same denominator. net_ev = placement basis (edge modeled at entry);
     # net_ev_close = close basis (edge vs the closing fair). The closing fair is
-    # haircut before the close-basis EV so it sits on the same shrunk basis as the
-    # placement fair; otherwise the gap would conflate the haircut with line moves.
+    # used raw (devigged, not haircut): the haircut is a pre-bet caution about our
+    # own estimate, but at close we are measuring realized value against the true
+    # line, so the unbiased devigged close is the right basis — matching the CLV
+    # diagnostic below, which uses the same raw close fair.
     net_ev = 0.0
     net_ev_close = 0.0
     net_ev_close_samples = 0
@@ -1039,7 +1046,7 @@ def snapshot():
         place_ev = s.get("expected_profit")
         if not isinstance(fpc, (int, float)) or not isinstance(place_ev, (int, float)):
             continue
-        close_ev = _expected_profit_at(s, config.haircut_fair(fpc))
+        close_ev = _expected_profit_at(s, fpc)
         if close_ev is None:
             continue
         net_ev += place_ev

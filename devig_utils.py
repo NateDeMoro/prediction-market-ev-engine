@@ -45,6 +45,105 @@ def devig_multiplicative(american_prices):
     return [p / total for p in probs]
 
 
+def _implied_probs(american_prices):
+    """American prices -> list of raw implied probs (1/decimal), or None if any
+    leg is degenerate. Sum is the overround (>1 for a normal vigged book)."""
+    probs = []
+    for p in american_prices:
+        d = american_to_decimal(p)
+        if d is None or d <= 0:
+            return None
+        probs.append(1.0 / d)
+    if not probs or sum(probs) <= 0:
+        return None
+    return probs
+
+
+def devig_power(american_prices, _tol=1e-12, _iters=200):
+    """Power devig: find exponent k with Σ pᵢᵏ = 1, then fairᵢ = pᵢᵏ.
+
+    Unlike multiplicative (which splits vig proportionally and so depends only on
+    the price *ratio*), power removes proportionally more vig from longshots,
+    partially correcting favorite-longshot bias. Always feasible (stays in
+    [0,1]); sits between multiplicative and Shin in aggressiveness.
+
+    Returns a list of fair probabilities summing to 1, or None on degenerate
+    input. Callers must handle None.
+    """
+    probs = _implied_probs(american_prices)
+    if probs is None:
+        return None
+    # f(k) = Σ pᵢᵏ - 1 is strictly decreasing in k (every pᵢ < 1): f(0)=n-1>0,
+    # f(∞)→-1. Bisect for the unique root. lo=0 covers the no-vig/arb case (k<1).
+    lo, hi = 0.0, 1.0
+    while sum(p ** hi for p in probs) > 1.0:
+        hi *= 2.0
+        if hi > 1e6:
+            return None
+    for _ in range(_iters):
+        mid = 0.5 * (lo + hi)
+        s = sum(p ** mid for p in probs)
+        if abs(s - 1.0) < _tol:
+            break
+        if s > 1.0:
+            lo = mid
+        else:
+            hi = mid
+    k = 0.5 * (lo + hi)
+    fair = [p ** k for p in probs]
+    total = sum(fair)
+    if total <= 0:
+        return None
+    return [f / total for f in fair]  # renormalize away residual bisection drift
+
+
+def devig_shin(american_prices, _tol=1e-12, _iters=200):
+    """Shin (1993) devig: models the book's margin as a defense against insider
+    money, removing more vig from longshots than power does. Solve for the
+    insider fraction z ∈ [0,1) such that Σ fairᵢ(z) = 1, where
+
+        fairᵢ(z) = ( sqrt(z² + 4(1-z)·πᵢ²/Σπ) − z ) / (2(1-z))
+
+    with πᵢ the raw implied probs and Σπ the overround. Strongest of the three
+    favorite-longshot corrections; for a 2-way market it approximates additive.
+
+    Returns a list of fair probabilities summing to 1, or None on degenerate
+    input. Callers must handle None.
+    """
+    probs = _implied_probs(american_prices)
+    if probs is None:
+        return None
+    booksum = sum(probs)
+
+    def fairs(z):
+        denom = 2.0 * (1.0 - z)
+        out = []
+        for pi in probs:
+            root = (z * z + 4.0 * (1.0 - z) * pi * pi / booksum) ** 0.5
+            out.append((root - z) / denom)
+        return out
+
+    # g(z) = Σ fairᵢ(z) - 1 is decreasing on [0,1): g(0)=sqrt(booksum)-1>0 for a
+    # vigged book, g→<0 as z→1. Bisect for the unique root.
+    lo, hi = 0.0, 1.0 - 1e-9
+    if sum(fairs(lo)) <= 1.0:
+        return devig_multiplicative(american_prices)  # no/negative vig -> no Shin
+    for _ in range(_iters):
+        mid = 0.5 * (lo + hi)
+        s = sum(fairs(mid))
+        if abs(s - 1.0) < _tol:
+            break
+        if s > 1.0:
+            lo = mid
+        else:
+            hi = mid
+    fair = fairs(0.5 * (lo + hi))
+    total = sum(fair)
+    if total <= 0:
+        return None
+    return [f / total for f in fair]  # renormalize away residual bisection drift
+
+
 def synthesize_combined_american(american_prices):
     """Collapse N American prices into one with implied prob = Σ inputs' probs.
 

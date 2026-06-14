@@ -147,6 +147,7 @@ def _refresh_fair(candidate, bulk_cache, sport_id_map):
             print(f"[engine.scan] fair-refresh skip {book}:{market_id} (devig failed)")
             return None
         yes_raw, opp_raw = devigged
+        yes_px, opp_px = found  # refreshed two-sided line behind this placement fair
     else:
         # Exact line gone -> interpolate (total/spread, #22) or fail-closed.
         yes_raw = _interp_fair(rows, candidate)
@@ -154,12 +155,17 @@ def _refresh_fair(candidate, bulk_cache, sport_id_map):
             print(f"[engine.scan] fair-refresh skip {book}:{market_id} (line moved away)")
             return None
         opp_raw = 1.0 - yes_raw
+        yes_px = opp_px = None  # interpolated -> no clean two-sided price pair
 
     return {
         "yes_fair_raw": yes_raw,
         "opposite_fair_raw": opp_raw,
         "yes_fair": config.haircut_fair(yes_raw),
         "opposite_fair": config.haircut_fair(opp_raw),
+        # Prices the placement fair was devigged from (alt-method backtest input);
+        # None when interpolated. Distinct from the snapshot c["yes_side_price"].
+        "yes_pin_price_used": yes_px,
+        "opposite_pin_price_used": opp_px,
     }
 
 
@@ -232,6 +238,8 @@ def scan():
                 c["fair_prob"] = fresh["yes_fair"]
                 c["yes_fair_raw"] = fresh["yes_fair_raw"]
                 c["opposite_fair_raw"] = fresh["opposite_fair_raw"]
+                c["yes_pin_price_used"] = fresh.get("yes_pin_price_used")
+                c["opposite_pin_price_used"] = fresh.get("opposite_pin_price_used")
                 fair_refreshed = True
 
         sides = [("yes", yes_ladder, c["yes_fair"])]

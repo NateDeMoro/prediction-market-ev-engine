@@ -52,9 +52,9 @@ def test_net_ev_close_sums_only_rows_with_close():
     pt._settled_records[:] = [_settled(3.0, fair_prob_close=0.6),
                               _settled(2.0, market_id="KX-2")]  # no close
     summ = pt.snapshot()["summary"]
-    # Close fair is haircut so it shares the placement fair's basis.
-    expected = round(pt._expected_profit_at(pt._settled_records[0],
-                                            config.haircut_fair(0.6)), 4)
+    # Close fair is used raw (devigged, not haircut): the close-basis EV measures
+    # realized value against the true line, matching the CLV diagnostic's basis.
+    expected = round(pt._expected_profit_at(pt._settled_records[0], 0.6), 4)
     assert summ["net_ev_close"] == expected
     assert summ["net_ev_close_samples"] == 1
 
@@ -128,5 +128,5 @@ def test_real_snapshot_has_both_ev():
     summ = rt.snapshot()["summary"]
     assert summ["net_ev"] == 3.0
     assert summ["net_ev_close"] == round(
-        pt._expected_profit_at(rt._settled_records[0], config.haircut_fair(0.6)), 4)
+        pt._expected_profit_at(rt._settled_records[0], 0.6), 4)
     assert summ["net_ev_close_samples"] == 1

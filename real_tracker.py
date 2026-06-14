@@ -484,6 +484,10 @@ def maybe_place(row, ladder, now=None):
         "opposite_designation": row.get("opposite_designation"),
         "fair_prob": fair_prob,
         "fair_prob_raw": row.get("fair_prob_raw"),
+        # Refreshed two-sided Pinnacle line behind the placement fair (mirrors
+        # paper) — alternate-devig backtest input; None when interpolated.
+        "yes_pin_price_used": row.get("yes_pin_price_used"),
+        "opposite_pin_price_used": row.get("opposite_pin_price_used"),
         # #6b: provenance of the fair this bet was placed on (mirrors paper).
         "fair_refreshed": row.get("fair_refreshed"),
         "pin_refetch_delta": row.get("pin_refetch_delta"),
@@ -1077,9 +1081,10 @@ def snapshot():
     total_pnl = round(settled_pnl, 4)
 
     # Two EV bases, mirroring paper_tracker.snapshot(): net_ev and net_ev_close are
-    # summed over the SAME closed subset so they're directly comparable, and the
-    # closing fair is haircut so close-basis EV matches the placement fair's basis.
-    # Voids contribute to neither.
+    # summed over the SAME closed subset so they're directly comparable. The closing
+    # fair is used raw (devigged, not haircut): at close we measure realized value
+    # against the true line, so the unbiased devigged close is the right basis,
+    # matching the CLV diagnostic. Voids contribute to neither.
     settled_live = [s for s in settled if s.get("result") != "void"]
     net_ev = 0.0
     net_ev_close = 0.0
@@ -1089,7 +1094,7 @@ def snapshot():
         place_ev = s.get("expected_profit")
         if not isinstance(fpc, (int, float)) or not isinstance(place_ev, (int, float)):
             continue
-        close_ev = pt._expected_profit_at(s, config.haircut_fair(fpc))
+        close_ev = pt._expected_profit_at(s, fpc)
         if close_ev is None:
             continue
         net_ev += place_ev
