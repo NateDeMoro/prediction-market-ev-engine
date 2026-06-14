@@ -174,10 +174,10 @@ def _replay_state():
         if key and key in _closes_by_key and s.get("fair_prob_close") is None:
             close = _closes_by_key[key]
             s["fair_prob_close"] = close.get("fair_prob_close")
-        # expected_profit is the placement-basis EV (net_ev). Settlements written
-        # by older code overwrote it to close-basis; restore the placement value
-        # from the placement record so the basis is consistent. The close-basis
-        # EV is recomputed on the fly in snapshot() as net_ev_close.
+        # expected_profit is the placement-basis EV. Settlements written by older
+        # code overwrote it to close-basis; restore the placement value from the
+        # placement record so the basis is consistent. Close-basis EV is
+        # recomputed on the fly in snapshot() as net_ev_close.
         if key and key in placements_by_key:
             pe = placements_by_key[key].get("expected_profit")
             if pe is not None:
@@ -979,8 +979,8 @@ def _settle_one(record):
             settlement["fair_prob_close"] = fpc
             if isinstance(avg_fill, (int, float)) and isinstance(fpc, (int, float)):
                 settlement["clv"] = round(fpc - avg_fill, 6)
-            # expected_profit stays placement-basis (net_ev); close-basis EV is
-            # computed on the fly in snapshot() as net_ev_close.
+            # expected_profit stays placement-basis; close-basis EV is computed on
+            # the fly in snapshot() as net_ev_close.
         _append_jsonl(config.PAPER_SETTLEMENTS_PATH, settlement)
         _settled_records.append(settlement)
 
@@ -1030,15 +1030,8 @@ def snapshot():
     # Voids contribute to none of the edge/CLV diagnostics below.
     settled_live = [s for s in settled if s.get("result") != "void"]
 
-    # Two EV bases summed over the SAME closed subset (settled bets that captured a
-    # Pinnacle close) so the two headline numbers are directly comparable — same
-    # bets, same denominator. net_ev = placement basis (edge modeled at entry);
-    # net_ev_close = close basis (edge vs the closing fair). The closing fair is
-    # used raw (devigged, not haircut): the haircut is a pre-bet caution about our
-    # own estimate, but at close we are measuring realized value against the true
-    # line, so the unbiased devigged close is the right basis — matching the CLV
-    # diagnostic below, which uses the same raw close fair.
-    net_ev = 0.0
+    # net_ev_close: close basis (edge vs raw devigged closing fair), CLV-consistent,
+    # summed over settled bets that captured a Pinnacle close. Voids excluded.
     net_ev_close = 0.0
     net_ev_close_samples = 0
     for s in settled_live:
@@ -1049,10 +1042,8 @@ def snapshot():
         close_ev = _expected_profit_at(s, fpc)
         if close_ev is None:
             continue
-        net_ev += place_ev
         net_ev_close += close_ev
         net_ev_close_samples += 1
-    net_ev = round(net_ev, 4)
     net_ev_close = round(net_ev_close, 4)
 
     # CLV is value vs the price paid, so it uses the raw closing fair (the true
@@ -1084,7 +1075,6 @@ def snapshot():
             "total_settled": total_settled,
             "open": len(open_list),
             "total_pnl": total_pnl,
-            "net_ev": net_ev,
             "net_ev_close": net_ev_close,
             "net_ev_close_samples": net_ev_close_samples,
             "roi_pct": round(roi_pct, 2),

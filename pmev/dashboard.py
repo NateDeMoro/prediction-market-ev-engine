@@ -528,7 +528,6 @@ function fmtPoll(r) {
 function render(data) {
   const s = data.summary || {};
   const pnlClass = (s.total_pnl || 0) >= 0 ? 'pos' : 'neg';
-  const evClass = (s.net_ev || 0) >= 0 ? 'pos' : 'neg';
   const evCloseClass = (s.net_ev_close || 0) >= 0 ? 'pos' : 'neg';
   let clvTile = '<div class="stat"><div class="lbl">Avg CLV</div><div class="val">—</div></div>';
   if (typeof s.avg_clv === 'number') {
@@ -553,8 +552,7 @@ function render(data) {
   document.getElementById('stats').innerHTML =
       '<div class="stat"><div class="lbl">Bankroll</div><div class="val">' + money(data.bankroll) + '</div></div>' +
       '<div class="stat"><div class="lbl">Net P&L</div><div class="val ' + pnlClass + '">' + money(s.total_pnl || 0) + '</div></div>' +
-      '<div class="stat"><div class="lbl">Net EV (placement)</div><div class="val ' + evClass + '">' + money(s.net_ev || 0) + '</div><div class="muted" style="font-size:11px;">' + (s.net_ev_close_samples || 0) + ' samples</div></div>' +
-      '<div class="stat"><div class="lbl">Net EV (close)</div><div class="val ' + evCloseClass + '">' + money(s.net_ev_close || 0) + '</div><div class="muted" style="font-size:11px;">' + (s.net_ev_close_samples || 0) + ' samples</div></div>' +
+      '<div class="stat"><div class="lbl">Net EV</div><div class="val ' + evCloseClass + '">' + money(s.net_ev_close || 0) + '</div><div class="muted" style="font-size:11px;">' + (s.net_ev_close_samples || 0) + ' samples</div></div>' +
       clvTile +
       fairDeltaTile +
       '<div class="stat"><div class="lbl">ROI</div><div class="val">' + (s.roi_pct || 0).toFixed(2) + '%</div></div>' +
@@ -814,7 +812,6 @@ function render(data) {
   }
 
   const pnlClass = (s.total_pnl || 0) >= 0 ? 'pos' : 'neg';
-  const evClass = (s.net_ev || 0) >= 0 ? 'pos' : 'neg';
   const evCloseClass = (s.net_ev_close || 0) >= 0 ? 'pos' : 'neg';
   let fdTile = '<div class="stat"><div class="lbl">Fair Δ</div><div class="val">—</div></div>';
   if (typeof s.avg_fair_delta === 'number') {
@@ -837,8 +834,7 @@ function render(data) {
       '<div class="stat"><div class="lbl">Kalshi</div><div class="val">' + money(data.kalshi_balance) + '</div></div>' +
       '<div class="stat"><div class="lbl">Polymarket</div><div class="val">' + money(data.polymarket_balance) + '</div></div>' +
       '<div class="stat"><div class="lbl">Net P&L</div><div class="val ' + pnlClass + '">' + money(s.total_pnl || 0) + '</div></div>' +
-      '<div class="stat"><div class="lbl">Net EV (placement)</div><div class="val ' + evClass + '">' + money(s.net_ev || 0) + '</div><div class="muted" style="font-size:11px;">' + (s.net_ev_close_samples || 0) + ' samples</div></div>' +
-      '<div class="stat"><div class="lbl">Net EV (close)</div><div class="val ' + evCloseClass + '">' + money(s.net_ev_close || 0) + '</div><div class="muted" style="font-size:11px;">' + (s.net_ev_close_samples || 0) + ' samples</div></div>' +
+      '<div class="stat"><div class="lbl">Net EV</div><div class="val ' + evCloseClass + '">' + money(s.net_ev_close || 0) + '</div><div class="muted" style="font-size:11px;">' + (s.net_ev_close_samples || 0) + ' samples</div></div>' +
       '<div class="stat"><div class="lbl">ROI</div><div class="val">' + (s.roi_pct || 0).toFixed(2) + '%</div></div>' +
       clvTile + fdTile +
       '<div class="stat"><div class="lbl">Placed</div><div class="val">' + (s.total_placed || 0) +

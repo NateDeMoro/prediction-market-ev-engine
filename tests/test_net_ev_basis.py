@@ -1,5 +1,5 @@
-"""#25 — net_ev reports two consistent bases: placement (modeled-at-entry) and
-close (vs Pinnacle's closing fair). See notes/clv-close-capture/test-plan-22-23-25.md."""
+"""#25 — net_ev_close reports close-basis EV (vs Pinnacle's raw closing fair).
+See notes/clv-close-capture/test-plan-22-23-25.md."""
 import os
 import sys
 
@@ -38,14 +38,6 @@ def _settled(expected_profit, fair_prob_close=None, result="yes", market_id="KX-
     if fair_prob_close is not None:
         s["fair_prob_close"] = fair_prob_close
     return s
-
-
-def test_net_ev_sums_placement_ev_over_closed_subset():
-    pt._settled_records[:] = [_settled(3.0, fair_prob_close=0.6),
-                              _settled(2.0, market_id="KX-2")]  # no close -> excluded
-    summ = pt.snapshot()["summary"]
-    # net_ev and net_ev_close share the closed subset, so the no-close bet is out.
-    assert summ["net_ev"] == 3.0
 
 
 def test_net_ev_close_sums_only_rows_with_close():
@@ -115,18 +107,16 @@ def test_replay_restores_placement_ev(monkeypatch, tmp_path):
     assert s["expected_profit"] == 3.0   # restored from the placement record
 
 
-def test_void_excluded_from_both_ev():
+def test_void_excluded_from_net_ev_close():
     pt._settled_records[:] = [_settled(3.0, fair_prob_close=0.6),
                               _settled(2.0, fair_prob_close=0.6, result="void", market_id="KX-2")]
     summ = pt.snapshot()["summary"]
-    assert summ["net_ev"] == 3.0              # void's placement EV excluded
     assert summ["net_ev_close_samples"] == 1  # void's close excluded
 
 
-def test_real_snapshot_has_both_ev():
+def test_real_snapshot_has_net_ev_close():
     rt._settled_records[:] = [_settled(3.0, fair_prob_close=0.6)]
     summ = rt.snapshot()["summary"]
-    assert summ["net_ev"] == 3.0
     assert summ["net_ev_close"] == round(
         pt._expected_profit_at(rt._settled_records[0], 0.6), 4)
     assert summ["net_ev_close_samples"] == 1

@@ -1080,13 +1080,9 @@ def snapshot():
     # but are not yet wins or losses.
     total_pnl = round(settled_pnl, 4)
 
-    # Two EV bases, mirroring paper_tracker.snapshot(): net_ev and net_ev_close are
-    # summed over the SAME closed subset so they're directly comparable. The closing
-    # fair is used raw (devigged, not haircut): at close we measure realized value
-    # against the true line, so the unbiased devigged close is the right basis,
-    # matching the CLV diagnostic. Voids contribute to neither.
+    # net_ev_close: close basis (edge vs raw devigged closing fair), CLV-consistent,
+    # summed over settled bets that captured a Pinnacle close. Voids excluded.
     settled_live = [s for s in settled if s.get("result") != "void"]
-    net_ev = 0.0
     net_ev_close = 0.0
     net_ev_close_samples = 0
     for s in settled_live:
@@ -1097,10 +1093,8 @@ def snapshot():
         close_ev = pt._expected_profit_at(s, fpc)
         if close_ev is None:
             continue
-        net_ev += place_ev
         net_ev_close += close_ev
         net_ev_close_samples += 1
-    net_ev = round(net_ev, 4)
     net_ev_close = round(net_ev_close, 4)
 
     # CLV uses the raw closing fair (value vs price paid); drawn from settled_live
@@ -1146,7 +1140,6 @@ def snapshot():
             "losses": losses,
             "hit_rate_pct": round(hit_rate, 2),
             "total_pnl": total_pnl,
-            "net_ev": net_ev,
             "net_ev_close": net_ev_close,
             "net_ev_close_samples": net_ev_close_samples,
             "roi_pct": round(roi_pct, 2),
