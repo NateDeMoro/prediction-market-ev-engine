@@ -414,11 +414,13 @@ MAX_HOURS_TO_START   = 3.0
 # 5. Feature flags
 # ---------------------------------------------------------------------------
 
-REAL_TRADING_ENABLED   = os.getenv("REAL_TRADING_ENABLED")   == "1"
-PAPER_INCLUDE_PROPS    = os.getenv("PAPER_INCLUDE_PROPS")     == "1"
-REAL_INCLUDE_PROPS     = os.getenv("REAL_INCLUDE_PROPS")      == "1"
-KALSHI_INCLUDE_PROPS   = os.getenv("KALSHI_INCLUDE_PROPS")    == "1"
-PINNACLE_INCLUDE_PROPS = os.getenv("PINNACLE_INCLUDE_PROPS")  == "1"
+# Edit these directly to enable/disable. config.py is the single source of
+# truth — these are NOT read from the environment.
+REAL_TRADING_ENABLED   = False
+PAPER_INCLUDE_PROPS    = True
+REAL_INCLUDE_PROPS     = False
+KALSHI_INCLUDE_PROPS   = True
+PINNACLE_INCLUDE_PROPS = True
 EV_DASHBOARD_HOST      = os.environ.get("EV_DASHBOARD_HOST", "127.0.0.1")
 
 # ---------------------------------------------------------------------------
