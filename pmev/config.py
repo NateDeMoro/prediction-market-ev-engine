@@ -18,7 +18,7 @@ from pmev.adapters.common import LEAGUE_TO_PIN_SPORT
 #    dashboard so a restart can be confirmed visually (number changes on deploy).
 # ---------------------------------------------------------------------------
 
-APP_VERSION = 7
+APP_VERSION = 8
 
 # ---------------------------------------------------------------------------
 # 1. Market enablement  (moved verbatim from market_config.py)
@@ -368,7 +368,7 @@ ADAPTER_TRADE_TIMEOUT = 15   # adapters/kalshi_trade.py, adapters/polymarket_tra
 # Tracker timing.
 SETTLEMENT_POLL_SEC     = 30 * 60   # shared by paper and real trackers
 CLOSE_CAPTURE_POLL_SEC  = 30
-CLOSE_CAPTURE_LEAD_SEC  = 60        # start capture this far before startTime
+CLOSE_CAPTURE_LEAD_SEC  = 15 * 60   # start capture this far before startTime
 CLOSE_CAPTURE_TRAIL_SEC = 15 * 60   # stop capture this far after startTime
 # Skip recording a close when the latest Pinnacle snapshot is older than this.
 # The risk being caught is a dead/stalled poller (which shows minutes of age),
