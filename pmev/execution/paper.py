@@ -41,7 +41,7 @@ from pmev.adapters.common import fuzzy_match
 from pmev.core.devig import devig_multiplicative, synthesize_combined_american
 from pmev import config
 
-PIN_PERIOD_LABEL_TO_INT = {"FULL": 0, "1H": 1, "2H": 2}
+PIN_PERIOD_LABEL_TO_INT = {"FULL": 0, "1H": 1, "2H": 2, "F5": 1}
 
 _lock = threading.Lock()
 _placed_keys = set()       # f"{book}:{market_id}:{side}"

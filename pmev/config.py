@@ -18,7 +18,7 @@ from pmev.adapters.common import LEAGUE_TO_PIN_SPORT
 #    dashboard so a restart can be confirmed visually (number changes on deploy).
 # ---------------------------------------------------------------------------
 
-APP_VERSION = 9
+APP_VERSION = 10
 
 # ---------------------------------------------------------------------------
 # 1. Market enablement  (moved verbatim from market_config.py)
@@ -421,6 +421,12 @@ PAPER_INCLUDE_PROPS    = True
 REAL_INCLUDE_PROPS     = False
 KALSHI_INCLUDE_PROPS   = True
 PINNACLE_INCLUDE_PROPS = True
+# F5 (first-5-innings) baseball 2-way markets (spread/total). Single choke point:
+# read in each adapter's normalize_market. Toggle here to disable without a code
+# change. F5_PAPER_ONLY keeps F5 out of real-money placement (paper validation
+# only) even when REAL_TRADING_ENABLED — F5 moneyline (3-way) is excluded in-adapter.
+F5_ENABLED             = True
+F5_PAPER_ONLY          = True
 EV_DASHBOARD_HOST      = os.environ.get("EV_DASHBOARD_HOST", "127.0.0.1")
 
 # ---------------------------------------------------------------------------

@@ -70,6 +70,40 @@ def test_opposite_side_perspective(monkeypatch):
     assert fresh["yes_fair"] > fresh["opposite_fair"]
 
 
+def _f5_total_candidate(**extra):
+    c = {
+        "book": "polymarket", "market_id": "P1", "pin_sport": "Baseball",
+        "pin_matchup_id": 123, "pin_start_time": "2026-06-12T20:00:00Z",
+        "market_type": "total", "period_label": "F5", "line": 4.5,
+        "yes_designation": "over", "opposite_designation": "under",
+        "yes_fair": 0.50, "opposite_fair": 0.50, "in_window": True,
+    }
+    c.update(extra)
+    return c
+
+
+def _f5_total_bulk(matchup_id=123):
+    """Same matchup carries a full-game (period 0) and an F5 (period 1) total at
+    the same line, with different prices, so the re-fetch must select period 1."""
+    def _total(period, over, under):
+        return {"matchupId": matchup_id, "type": "total", "period": period,
+                "prices": [{"designation": "over", "points": 4.5, "price": over},
+                           {"designation": "under", "points": 4.5, "price": under}]}
+    return [_total(0, -200, 160), _total(1, -110, -105)]
+
+
+def test_f5_refresh_resolves_period1(monkeypatch):
+    """#6b re-fetch for an F5 candidate must resolve the period-1 line. Before the
+    paper-map F5 entry, _find_pin_prices returns None and this fails closed — the
+    exact 'fair_refreshed=False on every F5 row' symptom seen on Jun-15."""
+    _patch_bulk(monkeypatch, _f5_total_bulk())
+    fresh = engine._refresh_fair(_f5_total_candidate(), {}, {"Baseball": 3})
+    assert fresh is not None
+    # period-1 prices were -110/-105 (devig ~0.5); period-0 were -200/160 (~0.65).
+    # A period-0 mismatch would push yes_fair well above 0.55.
+    assert fresh["yes_fair"] < 0.55
+
+
 def test_fetch_error_fails_closed(monkeypatch):
     _patch_bulk(monkeypatch, RuntimeError("boom"))
     assert engine._refresh_fair(_ml_candidate(), {}, SPORT_MAP) is None

@@ -129,9 +129,13 @@ def normalize_market(raw):
     slug = market.get("slug")
     if not slug:
         return None
-    # Drop F5 (first-5-innings) period markets — see _F5_SLUG_RE above.
-    if _F5_SLUG_RE.search(slug):
+    # F5 (first-5-innings) period markets — see _F5_SLUG_RE above. Wired for the
+    # clean 2-way types (spread/total) against Pinnacle's period-1 line; the
+    # moneyline branch drops F5 (3-way). Disabled wholesale via config.F5_ENABLED.
+    is_f5 = bool(_F5_SLUG_RE.search(slug))
+    if is_f5 and not config.F5_ENABLED:
         return None
+    period_label = "F5" if is_f5 else "FULL"
     is_long = bool(side.get("long"))
     market_id = _market_id(slug, is_long)
 
@@ -156,7 +160,7 @@ def normalize_market(raw):
             title=title,
             yes_sub_title=description or None,
             market_type=market_type,
-            period_label="FULL",
+            period_label=period_label,
             line=line_val,
             team=team_val,
             side=side_val,
@@ -166,6 +170,8 @@ def normalize_market(raw):
         )
 
     if market_type == "moneyline":
+        if is_f5:
+            return None  # F5 moneyline is 3-way (tie) — out of scope
         if not team:
             return None
         # Emit only the long side: the short side would surface the sibling team

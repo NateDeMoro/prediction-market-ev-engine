@@ -33,6 +33,10 @@ from pmev.config import market_enabled
 
 PIN_PERIOD_LABEL = {0: "FULL", 1: "1H", 2: "2H"}
 PERIOD_LABEL_TO_INT = {v: k for k, v in PIN_PERIOD_LABEL.items()}
+# Baseball F5 (first 5 innings) is Pinnacle period 1 — the same period int the
+# half-sports use for 1H. Added explicitly (not via the comprehension, which can
+# hold only one label per int) so an F5-labelled soft market resolves to period 1.
+PERIOD_LABEL_TO_INT["F5"] = 1
 
 
 def parse_iso(s):

@@ -201,8 +201,6 @@ def normalize_market(raw):
     ticker = raw.get("ticker")
     if not ticker:
         return None
-    if _KALSHI_F5_MARKER in st:
-        return None
 
     yes_sub = raw.get("yes_sub_title") or ""
     title = raw.get("title") or ""
@@ -212,7 +210,10 @@ def normalize_market(raw):
     start_time = raw.get("occurrence_datetime") or ""
     event_id = event_suffix(raw.get("event_ticker"))
     period_label = kalshi_period_label(st)
-    if period_label == "F5":
+    # F5 (first-5-innings) is wired for the clean 2-way types (spread/total)
+    # against Pinnacle's period-1 line; the moneyline branch drops F5 (3-way).
+    # Disabled wholesale via config.F5_ENABLED.
+    if period_label == "F5" and not config.F5_ENABLED:
         return None
     # League hint: lets the matcher constrain Pinnacle candidates by sport
     # (MLB->Baseball, NHL->Hockey, ...) to avoid cross-league city-name collisions.
@@ -260,6 +261,8 @@ def normalize_market(raw):
         return _nm("total", line, None, None)
 
     if MONEYLINE_SUFFIX.search(st):
+        if period_label == "F5":
+            return None  # F5 moneyline is 3-way (tie) — out of scope
         # YES-side team resolution against Pinnacle happens in the matcher;
         # we just carry the raw yes_sub_title text for that stage.
         return _nm("moneyline", None, yes_sub.strip() or None, None)

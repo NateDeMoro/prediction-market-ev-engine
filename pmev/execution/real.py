@@ -397,6 +397,10 @@ def _place_real_order(record):
 def maybe_place(row, ladder, now=None):
     if not row.get("in_window"):
         return None
+    # F5 (first-5-innings) is paper-only until its corrected pricing is validated —
+    # keep it out of real-money placement even when REAL_TRADING_ENABLED.
+    if row.get("period_label") == "F5" and config.F5_PAPER_ONLY:
+        return None
     nm = row.get("market")
     if nm is None:
         return None
