@@ -18,7 +18,7 @@ from pmev.adapters.common import LEAGUE_TO_PIN_SPORT
 #    dashboard so a restart can be confirmed visually (number changes on deploy).
 # ---------------------------------------------------------------------------
 
-APP_VERSION = 10
+APP_VERSION = 11
 
 # ---------------------------------------------------------------------------
 # 1. Market enablement  (moved verbatim from market_config.py)

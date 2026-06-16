@@ -78,6 +78,19 @@ CANONICAL_STAT = {
     # but in the NHL league context. The hockey context is disambiguated by
     # the parent game, so this collides intentionally with NBA "Points":
     # matcher scopes the stat lookup to a single Pinnacle matchupId.
+    # --- MLB ---
+    # Only the three stats with a true Pinnacle counterpart are mapped. Kalshi
+    # HIT (batter hits) is deliberately absent: Pinnacle's only "hits" prop is
+    # HitsAllowed, a *pitcher* stat, so mapping them would pair unrelated
+    # markets. KS / Strikeouts is the pitcher strikeout prop on both books.
+    # Kalshi suffixes
+    "TB": "total_bases",
+    "HR": "home_runs",
+    "KS": "strikeouts",
+    # Pinnacle units / stat strings
+    "TotalBases": "total_bases",
+    "HomeRuns": "home_runs",
+    "Strikeouts": "strikeouts",
 }
 
 COMBO_STATS = {"pts_reb_ast", "pts_reb", "reb_ast", "pts_ast"}
@@ -135,6 +148,18 @@ TEAM_ABBREV_BY_LEAGUE = {
         "NJ": "New Jersey Devils",
         "SJ": "San Jose Sharks",
         "LA": "Los Angeles Kings",
+    },
+    "MLB": {
+        "ATH": "Athletics", "ATL": "Atlanta Braves", "AZ": "Arizona Diamondbacks",
+        "BAL": "Baltimore Orioles", "BOS": "Boston Red Sox", "CHC": "Chicago Cubs",
+        "CIN": "Cincinnati Reds", "CLE": "Cleveland Guardians", "COL": "Colorado Rockies",
+        "CWS": "Chicago White Sox", "DET": "Detroit Tigers", "HOU": "Houston Astros",
+        "KC": "Kansas City Royals", "LAA": "Los Angeles Angels", "LAD": "Los Angeles Dodgers",
+        "MIA": "Miami Marlins", "MIL": "Milwaukee Brewers", "MIN": "Minnesota Twins",
+        "NYM": "New York Mets", "NYY": "New York Yankees", "PHI": "Philadelphia Phillies",
+        "PIT": "Pittsburgh Pirates", "SD": "San Diego Padres", "SEA": "Seattle Mariners",
+        "SF": "San Francisco Giants", "STL": "St. Louis Cardinals", "TB": "Tampa Bay Rays",
+        "TEX": "Texas Rangers", "TOR": "Toronto Blue Jays", "WSH": "Washington Nationals",
     },
 }
 

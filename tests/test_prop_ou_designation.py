@@ -160,6 +160,41 @@ class TestCollectPropRowsDesignation:
         rows = self._run(_related(league_name="WNBA"), _markets())
         assert rows == []
 
+    def test_mlb_league_now_produces_rows(self):
+        # MLB was added to PROP_LEAGUES so baseball props are ingested. Build an
+        # MLB Home Runs child and assert a clean over/under row with the camelCase
+        # units string the matcher canonicalizes against.
+        related = [
+            {
+                "id": PARENT_ID, "type": "matchup",
+                "league": {"name": "MLB"},
+                "participants": [
+                    {"alignment": "home", "name": "Los Angeles Dodgers"},
+                    {"alignment": "away", "name": "Tampa Bay Rays"},
+                ],
+            },
+            {
+                "id": CHILD_ID, "type": "special", "units": "HomeRuns",
+                "special": {"category": "Player Props",
+                            "description": "Yandy Díaz (Home Runs)"},
+                "participants": [
+                    {"id": OVER_PID, "name": "Over", "alignment": "neutral"},
+                    {"id": UNDER_PID, "name": "Under", "alignment": "neutral"},
+                ],
+            },
+        ]
+        markets = [{"matchupId": CHILD_ID, "type": "total", "prices": [
+            {"participantId": OVER_PID, "price": 120, "points": 0.5},
+            {"participantId": UNDER_PID, "price": -150, "points": 0.5},
+        ]}]
+        rows = self._run(related, markets)
+        assert len(rows) == 1
+        assert rows[0]["player"] == "Yandy Díaz"
+        assert rows[0]["stat_units"] == "HomeRuns"
+        by_pid = {p["participantId"]: p["designation"] for p in rows[0]["prices"]}
+        assert by_pid[OVER_PID] == "over"
+        assert by_pid[UNDER_PID] == "under"
+
 
 # ---------------------------------------------------------------------------
 # Group 2: _find_prop_prices — designation-keyed extraction

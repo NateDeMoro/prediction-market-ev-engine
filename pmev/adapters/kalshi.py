@@ -54,8 +54,12 @@ PROP_SERIES = {
     "KXNBAPRA", "KXNBAPR", "KXNBARA", "KXNBAPA",
     # NHL
     "KXNHLPTS", "KXNHLGOALS", "KXNHLSOG",
-    # NFL / MLB — ingested by poller but not matched yet (no Pinnacle prop
-    # coverage validated). Accepted here so we don't silently drop them.
+    # MLB — only the three stats with a true Pinnacle counterpart (TotalBases,
+    # HomeRuns, pitcher Strikeouts). Batter hits (KXMLBHIT) is excluded: Pinnacle
+    # only publishes HitsAllowed, a pitcher stat. RBI/SB/HRR have no counterpart.
+    "KXMLBTB", "KXMLBHR", "KXMLBKS",
+    # NFL — ingested by poller but not matched yet (no Pinnacle prop coverage
+    # validated). Accepted here so we don't silently drop them.
     "KXNFLPASSYDS", "KXNFLPASSTDS", "KXNFLRSHYDS", "KXNFLRECYDS",
     "KXNFLREC", "KXNFLANYTD", "KXNFLNEXTTD",
 }
@@ -65,8 +69,11 @@ PROP_SERIES = {
 _PROP_SERIES_STAT_RE = re.compile(r"^KX(?:NBA|NHL|NFL|MLB)(?P<stat>.+)$")
 
 # "Sidney Crosby: 3+ points" -> ("Sidney Crosby", 3)
+# "Yandy Díaz: 2+ home runs?" -> ("Yandy Díaz", 2). The canonical stat comes
+# from the series suffix, so the trailing stat label may be multi-word and end
+# in "?"; we only require a player and an "N+" threshold.
 _PROP_TITLE_RE = re.compile(
-    r"^(?P<player>[^:]+):\s*(?P<n>\d+(?:\.\d+)?)\+\s*\w+\s*$"
+    r"^(?P<player>[^:]+):\s*(?P<n>\d+(?:\.\d+)?)\+\s*\w.*$"
 )
 
 # "KXNBAREB-26APR22ORLDET-ORLWCARTER34-8": per-player segment is the third

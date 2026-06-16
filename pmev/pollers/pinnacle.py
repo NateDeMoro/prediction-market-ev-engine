@@ -65,8 +65,8 @@ SNAPSHOT_RETENTION     = config.POLLER_SNAPSHOT_RETENTION
 # filter applied after we've fetched /related (which carries league.name on the
 # parent). See data/pinnacle_probe/NOTES.md.
 INCLUDE_PROPS = config.PINNACLE_INCLUDE_PROPS
-PROP_SPORTS = {"Basketball", "Hockey"}
-PROP_LEAGUES = {"NBA", "NHL"}
+PROP_SPORTS = {"Basketball", "Hockey", "Baseball"}
+PROP_LEAGUES = {"NBA", "NHL", "MLB"}
 
 DATA_DIR = config.DATA_DIR
 SNAPSHOT_DIR = config.PIN_SNAPSHOT_DIR

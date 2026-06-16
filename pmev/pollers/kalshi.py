@@ -69,6 +69,9 @@ PER_GAME_PROP_SERIES = {
     "KXNBAPRA", "KXNBAPR", "KXNBARA", "KXNBAPA",
     # NHL
     "KXNHLPTS", "KXNHLGOALS", "KXNHLSOG",
+    # MLB — only stats with a true Pinnacle counterpart: Total Bases, Home Runs,
+    # pitcher Strikeouts. (Batter hits / RBI / SB / combos have none.)
+    "KXMLBTB", "KXMLBHR", "KXMLBKS",
     # NFL
     "KXNFLPASSYDS", "KXNFLPASSTDS", "KXNFLRSHYDS", "KXNFLRECYDS",
     "KXNFLREC", "KXNFLANYTD", "KXNFLNEXTTD",
