@@ -23,7 +23,7 @@ def american_to_decimal(a):
         return None
     if a >= 100:
         return 1.0 + a / 100.0
-    return 1.0 + 100.0 / a
+    return 1.0 + 100.0 / abs(a)
 
 
 def devig_multiplicative(american_prices):
