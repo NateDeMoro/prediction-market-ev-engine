@@ -21,12 +21,15 @@ without one replay as Kalshi to preserve pre-refactor bankroll.
 State is reconstructed on import by replaying:
   data/paper_trades.jsonl        (append-only placements)
   data/paper_settlements.jsonl   (append-only settlements)
+  data/paper_reverify.jsonl      (append-only post-fill ladder re-checks)
 
 Public API:
   maybe_place(row, ladder, now)  -> record | None
   start_settlement_thread()      -> Thread
+  start_reverify_thread()        -> Thread
   snapshot()                     -> dict for /api/paper
 """
+import collections
 import fcntl
 import json
 import math
@@ -50,6 +53,26 @@ _settled_records = []
 _placements = []
 _closes_by_key = {}        # key -> close record
 _bankroll = config.PAPER_INITIAL_BANKROLL
+
+
+def _new_pending_queue():
+    """Bounded FIFO of placements awaiting their post-fill re-check.
+
+    maxlen makes over-pressure drop the *oldest* entry, which is the right one to
+    lose: it is the entry closest to aging out of tolerance anyway.
+    """
+    return collections.deque(maxlen=config.PAPER_REVERIFY_MAX_PENDING)
+
+
+def _new_reverify_agg():
+    return {"measured": 0, "skipped": 0, "claimed_shares": 0, "survived_shares": 0}
+
+
+# Re-verification carries its own lock, deliberately not `_lock`: a diagnostic
+# must never contend with the placement path it exists to observe.
+_reverify_lock = threading.Lock()
+_pending_reverify = _new_pending_queue()
+_reverify_agg = _new_reverify_agg()
 
 
 def _key(book, market_id, side="yes"):
@@ -188,6 +211,12 @@ def _replay_state():
         pnl = s.get("net_pnl")
         if isinstance(pnl, (int, float)):
             _bankroll += pnl
+
+    # Re-verification is a per-placement observation, not position state, so it
+    # replays into the aggregate only — nothing here reopens or re-grades a bet.
+    _reverify_agg.update(_new_reverify_agg())
+    for r in _read_jsonl(config.PAPER_REVERIFY_PATH):
+        _fold_reverify(r)
 
 
 _replay_state()
@@ -419,7 +448,214 @@ def maybe_place(row, ladder, now=None):
         _open_positions[key] = record
         _placements.append(record)
 
+    # Outside the lock, and only once the record is actually written — the
+    # in-lock dedup re-check above returns None without enqueuing.
+    _enqueue_reverify(record)
+
     return record
+
+
+# ---------------------------------------------------------------------------
+# Post-fill ladder re-verification
+#
+# The fill above is simulated against the ladder read at decision time. Nothing
+# in that path proves the offer was still standing a moment later, which is the
+# difference between a bet that could have been placed and one that only looks
+# placeable on paper. Each placement is re-checked once, ~2s later, and the
+# surviving share count is written to its own sidecar.
+#
+# Diagnostic only. It never blocks, alters, or feeds back into a placement.
+# ---------------------------------------------------------------------------
+
+_PRICE_EPS = 1e-9
+
+
+def _survival(levels, observed):
+    """Of the shares claimed at each price, how many could still be bought at
+    that price or better?
+
+    use when: grading a paper fill against a ladder re-read moments later. Pure —
+    no network, no locks, no module state. `levels` is the placement's
+    `[[price, shares]]` fill detail; `observed` is the freshly fetched
+    side-correct ask ladder.
+
+    Observed liquidity is consumed as it is matched, so one resting offer can
+    never satisfy two claimed levels. A better (lower) ask counts as full
+    survival — price improvement is not penalised; a worse one counts as none.
+    """
+    remaining = sorted(([float(p), int(q)] for p, q in (observed or [])),
+                       key=lambda lv: lv[0])
+
+    per_level = []
+    claimed_total = 0
+    survived_total = 0
+    for price, shares in (levels or []):
+        price = float(price)
+        want = int(shares)
+        claimed_total += want
+        got = 0
+        for lv in remaining:
+            if got >= want:
+                break
+            if lv[0] > price + _PRICE_EPS:
+                break          # ascending, so nothing further is affordable
+            if lv[1] <= 0:
+                continue       # already consumed by an earlier claimed level
+            take = min(lv[1], want - got)
+            lv[1] -= take
+            got += take
+        survived_total += got
+        per_level.append([price, want, got])
+
+    return {"claimed_shares": claimed_total,
+            "survived_shares": survived_total,
+            "per_level": per_level}
+
+
+def _enqueue_reverify(record, now=None):
+    """Queue a placement for its one post-fill re-check. Returns the entry, or
+    None when disabled or when the record carries no fill detail to grade."""
+    if not config.PAPER_REVERIFY_ENABLED:
+        return None
+    levels = record.get("levels") or []
+    if not levels:
+        return None
+    at = time.time() if now is None else now
+    entry = {
+        "placed_at": record.get("placed_at"),
+        "book": record.get("book"),
+        "market_id": record.get("market_id"),
+        "side": record.get("side"),
+        "levels": [[float(p), int(q)] for p, q in levels],
+        "enqueued_at": at,
+        "due_at": at + config.PAPER_REVERIFY_DELAY_SEC,
+    }
+    with _reverify_lock:
+        _pending_reverify.append(entry)
+    return entry
+
+
+def _fold_reverify(rec):
+    """Accumulate one sidecar record into the in-memory aggregate. Shared by the
+    live path and `_replay_state`, so the /paper figure survives a restart."""
+    if rec.get("status") == "measured":
+        _reverify_agg["measured"] += 1
+        _reverify_agg["claimed_shares"] += int(rec.get("claimed_shares") or 0)
+        _reverify_agg["survived_shares"] += int(rec.get("survived_shares") or 0)
+    else:
+        _reverify_agg["skipped"] += 1
+
+
+def _write_reverify(rec):
+    _append_jsonl(config.PAPER_REVERIFY_PATH, rec)
+    with _reverify_lock:
+        _fold_reverify(rec)
+    return rec
+
+
+def reverify_one(entry, now=None):
+    """Re-read one placement's book and record how much of the claimed liquidity
+    survived. Returns the sidecar record.
+
+    Fail-open by the established rule: a fetch error, a missing side ladder, or a
+    check that arrived too late is recorded with an explicit status rather than
+    raised or silently counted as a valid observation.
+    """
+    at = time.time() if now is None else now
+    rec = {
+        "reverified_at": datetime.now(timezone.utc).isoformat(),
+        "placed_at": entry.get("placed_at"),
+        "book": entry.get("book"),
+        "market_id": entry.get("market_id"),
+        "side": entry.get("side"),
+        "delay_sec": round(float(at - entry["enqueued_at"]), 4),
+        "target_delay_sec": config.PAPER_REVERIFY_DELAY_SEC,
+        "levels": entry.get("levels"),
+        "claimed_shares": sum(int(q) for _, q in entry.get("levels") or []),
+        "survived_shares": None,
+        "survival_rate": None,
+        "per_level": None,
+        "observed_levels": None,
+        "status": "measured",
+        "error": None,
+    }
+
+    if at - entry["due_at"] > config.PAPER_REVERIFY_TOLERANCE_SEC:
+        # This measured a different moment than the one being graded. Recording
+        # it as an observation would let a starved worker inflate the survival
+        # rate with checks that never happened on time.
+        rec["status"] = "skipped_late"
+        return _write_reverify(rec)
+
+    try:
+        yes_ladder, no_ladder = adapter_for(entry["book"]).fetch_both_ladders(
+            entry["market_id"])
+    except Exception as e:
+        rec["status"] = "fetch_error"
+        rec["error"] = f"{type(e).__name__}: {e}"
+        return _write_reverify(rec)
+
+    # Index the returned pair by the placement's side. Never re-derive the
+    # yes/no mapping here — Kalshi's is deliberately inverted inside its adapter.
+    observed = yes_ladder if (entry.get("side") or "yes") == "yes" else no_ladder
+    if observed is None:
+        # Adapters without a NO side return (yes_ladder, None).
+        rec["status"] = "no_ladder"
+        return _write_reverify(rec)
+
+    out = _survival(entry.get("levels"), observed)
+    rec["claimed_shares"] = out["claimed_shares"]
+    rec["survived_shares"] = out["survived_shares"]
+    rec["per_level"] = out["per_level"]
+    rec["survival_rate"] = (
+        round(out["survived_shares"] / out["claimed_shares"], 6)
+        if out["claimed_shares"] > 0 else None)
+    rec["observed_levels"] = [[float(p), int(q)] for p, q in observed]
+    return _write_reverify(rec)
+
+
+def run_reverify(now=None):
+    """Drain every pending entry past its due time. Returns the records written.
+
+    Unlike close capture this is not a sweep: entries are one-shot and leave the
+    queue whether they were measured or skipped, so an old bet is never
+    re-checked forever.
+    """
+    at = time.time() if now is None else now
+    due = []
+    with _reverify_lock:
+        while _pending_reverify and _pending_reverify[0]["due_at"] <= at:
+            due.append(_pending_reverify.popleft())
+
+    written = []
+    for entry in due:
+        try:
+            written.append(reverify_one(entry, now=at))
+        except Exception:
+            # reverify_one is already fail-open; this is the backstop that stops
+            # one malformed entry from stranding the rest of the drained batch.
+            traceback.print_exc()
+    return written
+
+
+def reverify_once():
+    """Paper-bound wrapper (mirrors capture_closes_once)."""
+    return run_reverify()
+
+
+def _reverify_loop():
+    while True:
+        try:
+            reverify_once()
+        except Exception:
+            traceback.print_exc()
+        time.sleep(config.PAPER_REVERIFY_POLL_SEC)
+
+
+def start_reverify_thread():
+    t = threading.Thread(target=_reverify_loop, daemon=True)
+    t.start()
+    return t
 
 
 # ---------------------------------------------------------------------------
@@ -1064,12 +1300,22 @@ def snapshot():
     fair_delta_positive = sum(1 for d in fair_deltas if d > 0)
     fair_delta_samples = len(fair_deltas)
 
+    # Post-fill ladder survival. The headline rate counts only in-tolerance
+    # measured checks; `skipped` sits beside it so a high failure rate cannot
+    # hide behind a healthy-looking percentage.
+    with _reverify_lock:
+        reverify = dict(_reverify_agg)
+    reverify["survival_pct"] = (
+        round(reverify["survived_shares"] / reverify["claimed_shares"] * 100, 2)
+        if reverify["claimed_shares"] > 0 else None)
+
     return {
         "bankroll": round(bankroll, 4),
         "initial_bankroll": config.PAPER_INITIAL_BANKROLL,
         "kelly_fraction": config.KELLY_FRACTION,
         "open_positions": open_list,
         "settled": settled,
+        "reverify": reverify,
         "summary": {
             "total_placed": total_placed,
             "total_settled": total_settled,

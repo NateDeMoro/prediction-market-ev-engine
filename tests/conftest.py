@@ -36,6 +36,13 @@ def closes_path(tmp_path, monkeypatch):
 
 
 @pytest.fixture
+def reverify_path(tmp_path, monkeypatch):
+    p = tmp_path / "paper_reverify.jsonl"
+    monkeypatch.setattr(config, "PAPER_REVERIFY_PATH", str(p))
+    return p
+
+
+@pytest.fixture
 def write_pin_snapshot(pin_dir):
     """Write rows to a new, lexically-latest *.jsonl in the pin snapshot dir.
     age_sec back-dates the file mtime so freshness can be controlled. The loader

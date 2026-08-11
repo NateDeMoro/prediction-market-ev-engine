@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.pmev.ev-dashboard</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__REPO__/deploy/launchd/run.sh</string>
+        <string>pmev.dashboard</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__REPO__</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart on crash only; a clean exit stays down (systemd Restart=on-failure). -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>__REPO__/data/ev-dashboard.log</string>
+    <key>StandardErrorPath</key>
+    <string>__REPO__/data/ev-dashboard.log</string>
+</dict>
+</plist>

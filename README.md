@@ -50,7 +50,26 @@ python3 -m pmev.dashboard             # then open http://127.0.0.1:5055
 
 ## Deployment
 
+### Linux / VPS
+
 `deploy/setup.sh` provisions a fresh Ubuntu 24.04 box (user, firewall, Tailscale, Python deps). The four systemd units in `deploy/systemd/` run the three pollers and the dashboard as services, reading config from an `EnvironmentFile`. The dashboard is reached over Tailscale; only SSH is exposed publicly. Production state lives at `~/Arbitrage_Betting` on the VPS — the local repo is for editing code only.
+
+### macOS (always-on Mac)
+
+`deploy/launchd/` holds the same four services as launchd agents. Run in the repo root:
+
+```bash
+uv venv --python 3.12 .venv                  # system python3 is too old (3.10+ syntax)
+uv pip install -p .venv requests flask cryptography numpy pytest
+cp deploy/env.example .env && chmod 600 .env # set PINNACLE_API_KEY
+./deploy/launchd/install.sh                  # load all four agents
+```
+
+launchd has no `EnvironmentFile`, so each agent runs `deploy/launchd/run.sh`, which sources `.env` and execs the module under `.venv`. Agents restart on crash and start at login. `install.sh` is idempotent — re-run it after editing a plist; it waits out launchd's async `bootout` before re-bootstrapping, which otherwise fails with `Input/output error`. Unload with `launchctl bootout gui/$UID/com.pmev.<service>`.
+
+Logging mirrors the systemd units: pollers already write their own `data/<book>.log` via `core/io.py`, so their launchd stdout goes to `/dev/null` to avoid a byte-identical duplicate — only stderr is kept, at `data/<service>.err.log`, since crash tracebacks never reach the app logger. The dashboard has no log file of its own, so both streams go to `data/ev-dashboard.log`.
+
+Unlike the VPS, state lives in the repo's own `data/`. Confirm the machine never sleeps (`pmset -g | grep sleep`), or the pollers stall.
 
 ## Design notes
 
@@ -62,4 +81,5 @@ python3 -m pmev.dashboard             # then open http://127.0.0.1:5055
 - Real-money trading is off by default and gated on `REAL_TRADING_ENABLED=1`, with a $30 per-bet cap and a -$100 daily-loss halt.
 - Tracker accuracy is graded on two footings, both summed over the same closed-bet subset so they're directly comparable: realized P&L against the placement-basis edge (`net_ev`), and closing-line value — each open bet captures Pinnacle's closing fair near kickoff, yielding per-bet CLV and a close-basis edge (`net_ev_close`). The closing fair is put on the same haircut basis as the placement fair for the EV/Fair-Δ comparison; CLV uses the raw closing line (value vs the price paid).
 - Kalshi markets that resolve `scalar` (postponed/cancelled past the settlement window, or ties → a fractional per-share payout) are settled at that payout rather than left open indefinitely.
+- Paper fills are graded for realism by a post-fill ladder re-check: ~2s after each paper placement the engine re-reads that market's book and records how many of the shares it claimed to take were still buyable at the same price or better (`config.PAPER_REVERIFY_*`, `data/paper_reverify.jsonl`, surfaced as Fill survival on `/paper`). A simulated fill is only as honest as the liquidity behind it, and the decision-time ladder proves nothing about the moment after — this is the evidence for whether paper results transfer to real money. Price improvement counts as survival; a check that lands outside its delay tolerance is recorded as skipped rather than counted, so a starved worker can't inflate the rate. Diagnostic only — it never feeds back into sizing or placement gating.
 - All tracker state is append-only JSONL; in-memory state is reconstructed by replaying it on import — nothing is mutated in place.

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.pmev.polymarket-poller</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__REPO__/deploy/launchd/run.sh</string>
+        <string>pmev.pollers.polymarket</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__REPO__</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart on crash only; a clean exit stays down (systemd Restart=on-failure). -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <!-- The poller writes its own data/<book>.log via core/io.py, so stdout would
+         duplicate it byte-for-byte (systemd used StandardOutput=null here).
+         Keep stderr: crash tracebacks never reach the app logger. -->
+    <key>StandardOutPath</key>
+    <string>/dev/null</string>
+    <key>StandardErrorPath</key>
+    <string>__REPO__/data/polymarket-poller.err.log</string>
+</dict>
+</plist>

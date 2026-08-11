@@ -389,6 +389,23 @@ CLOSE_CAPTURE_INTERP_MAX_POINTS_SPREAD = 1.0
 ORDER_POLL_SEC          = 5
 BALANCE_LOG_POLL_SEC    = 5 * 60
 
+# Post-fill ladder re-verification (paper only). A paper fill is simulated against
+# the ladder read at decision time; nothing proves the offer was still standing a
+# moment later. Each placement is re-checked once, this far after the fill, and the
+# surviving share count is written to PAPER_REVERIFY_PATH. Diagnostic only — it
+# never feeds back into sizing or the placement decision.
+PAPER_REVERIFY_ENABLED      = True
+PAPER_REVERIFY_DELAY_SEC    = 2.0
+# The worker wakes this often to drain everything past its due time.
+PAPER_REVERIFY_POLL_SEC     = 0.5
+# A re-check that lands this far past its due time measured the wrong moment, so
+# it is recorded as skipped rather than counted as a valid observation. Sized to
+# absorb a slow fetch (ADAPTER_READ_TIMEOUT) on the entry ahead of it in the queue.
+PAPER_REVERIFY_TOLERANCE_SEC = 15.0
+# Bound on pending entries. Placements arrive far slower than the drain rate, so
+# this only matters if the worker stalls; oldest entries drop first.
+PAPER_REVERIFY_MAX_PENDING  = 256
+
 # Dashboard.
 DASHBOARD_REFRESH_SEC         = 60
 LADDER_FETCH_TIMEOUT_SEC      = float(os.getenv("LADDER_FETCH_TIMEOUT_SEC", "5.0"))
@@ -445,6 +462,7 @@ PAPER_TRADES_PATH          = os.path.join(DATA_DIR, "paper_trades.jsonl")
 PAPER_SETTLEMENTS_PATH     = os.path.join(DATA_DIR, "paper_settlements.jsonl")
 PAPER_CLOSES_PATH          = os.path.join(DATA_DIR, "paper_closes.jsonl")
 PAPER_SANITY_REJECTED_PATH = os.path.join(DATA_DIR, "sanity_rejected.jsonl")
+PAPER_REVERIFY_PATH        = os.path.join(DATA_DIR, "paper_reverify.jsonl")
 
 # Real tracker state files.
 REAL_TRADES_PATH           = os.path.join(DATA_DIR, "real_trades.jsonl")
