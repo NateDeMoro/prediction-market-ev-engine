@@ -549,12 +549,25 @@ function render(data) {
                     '<div class="val ' + cls + '">' + sign + bps.toFixed(2) + ' pp</div>' +
                     '<div class="muted" style="font-size:11px;">' + sub + '</div></div>';
   }
+  // Post-fill ladder survival: how much of the liquidity each paper fill claimed
+  // was still there ~2s later. The rate covers in-tolerance checks only; skipped
+  // sits beside it so a high failure rate can't hide behind a healthy number.
+  const rv = data.reverify || {};
+  let reverifyTile = '<div class="stat"><div class="lbl">Fill survival</div><div class="val">—</div></div>';
+  if (typeof rv.survival_pct === 'number') {
+    const cls = rv.survival_pct >= 90 ? 'pos' : (rv.survival_pct >= 70 ? '' : 'neg');
+    const sub = (rv.measured || 0) + ' checked · ' + (rv.skipped || 0) + ' skipped';
+    reverifyTile = '<div class="stat"><div class="lbl">Fill survival</div>' +
+                   '<div class="val ' + cls + '">' + rv.survival_pct.toFixed(1) + '%</div>' +
+                   '<div class="muted" style="font-size:11px;">' + sub + '</div></div>';
+  }
   document.getElementById('stats').innerHTML =
       '<div class="stat"><div class="lbl">Bankroll</div><div class="val">' + money(data.bankroll) + '</div></div>' +
       '<div class="stat"><div class="lbl">Net P&L</div><div class="val ' + pnlClass + '">' + money(s.total_pnl || 0) + '</div></div>' +
       '<div class="stat"><div class="lbl">Net EV</div><div class="val ' + evCloseClass + '">' + money(s.net_ev_close || 0) + '</div><div class="muted" style="font-size:11px;">' + (s.net_ev_close_samples || 0) + ' samples</div></div>' +
       clvTile +
       fairDeltaTile +
+      reverifyTile +
       '<div class="stat"><div class="lbl">ROI</div><div class="val">' + (s.roi_pct || 0).toFixed(2) + '%</div></div>' +
       '<div class="stat"><div class="lbl">Placed</div><div class="val">' + (s.total_placed || 0) + '</div></div>' +
       '<div class="stat"><div class="lbl">Open</div><div class="val">' + (s.open || 0) + '</div></div>' +
@@ -953,6 +966,7 @@ def main():
     t.start()
     paper_tracker.start_settlement_thread()
     paper_tracker.start_close_capture_thread()
+    paper_tracker.start_reverify_thread()
     real_tracker.start_settlement_thread()
     real_tracker.start_close_capture_thread()
     real_tracker.start_order_polling_thread()

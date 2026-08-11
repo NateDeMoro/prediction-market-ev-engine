@@ -48,6 +48,7 @@ data/match_report_props.json
 data/paper_trades.jsonl
 data/paper_settlements.jsonl
 data/paper_closes.jsonl
+data/paper_reverify.jsonl
 data/sanity_rejected.jsonl
 data/real_trades.jsonl
 data/real_fills.jsonl
