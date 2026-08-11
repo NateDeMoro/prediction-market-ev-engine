@@ -50,7 +50,26 @@ python3 -m pmev.dashboard             # then open http://127.0.0.1:5055
 
 ## Deployment
 
+### Linux / VPS
+
 `deploy/setup.sh` provisions a fresh Ubuntu 24.04 box (user, firewall, Tailscale, Python deps). The four systemd units in `deploy/systemd/` run the three pollers and the dashboard as services, reading config from an `EnvironmentFile`. The dashboard is reached over Tailscale; only SSH is exposed publicly. Production state lives at `~/Arbitrage_Betting` on the VPS — the local repo is for editing code only.
+
+### macOS (always-on Mac)
+
+`deploy/launchd/` holds the same four services as launchd agents. Run in the repo root:
+
+```bash
+uv venv --python 3.12 .venv                  # system python3 is too old (3.10+ syntax)
+uv pip install -p .venv requests flask cryptography numpy pytest
+cp deploy/env.example .env && chmod 600 .env # set PINNACLE_API_KEY
+./deploy/launchd/install.sh                  # load all four agents
+```
+
+launchd has no `EnvironmentFile`, so each agent runs `deploy/launchd/run.sh`, which sources `.env` and execs the module under `.venv`. Agents restart on crash and start at login. `install.sh` is idempotent — re-run it after editing a plist; it waits out launchd's async `bootout` before re-bootstrapping, which otherwise fails with `Input/output error`. Unload with `launchctl bootout gui/$UID/com.pmev.<service>`.
+
+Logging mirrors the systemd units: pollers already write their own `data/<book>.log` via `core/io.py`, so their launchd stdout goes to `/dev/null` to avoid a byte-identical duplicate — only stderr is kept, at `data/<service>.err.log`, since crash tracebacks never reach the app logger. The dashboard has no log file of its own, so both streams go to `data/ev-dashboard.log`.
+
+Unlike the VPS, state lives in the repo's own `data/`. Confirm the machine never sleeps (`pmset -g | grep sleep`), or the pollers stall.
 
 ## Design notes
 
