@@ -2,7 +2,8 @@
 Render the README result figures from the paper-trade settlement history.
 
 use when:
-  Refreshing docs/figures/ after pulling a new 1000BetsTracked snapshot.
+  Refreshing docs/figures/ from the paper-trade history in data/
+  (or any settlements file passed as the first argument).
   Read-only on the data; writes PNGs only.
 
 Figures (each in a light and a dark variant for GitHub's theme switch):
@@ -10,12 +11,14 @@ Figures (each in a light and a dark variant for GitHub's theme switch):
                      over bets with a captured close, in settlement order.
   - clv_histogram:   per-bet CLV (closing fair - fill price) in percentage points.
 
-Run: python3 -m analysis.plot_results   (requires matplotlib)
+Run: python3 -m analysis.plot_results [path/to/paper_settlements.jsonl]
+     (requires matplotlib)
 """
 from __future__ import annotations
 
 import json
 import os
+import sys
 from statistics import mean
 
 import matplotlib
@@ -24,7 +27,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SETTLEMENTS = os.path.join(DIR, "1000BetsTracked", "paper_settlements.jsonl")
+SETTLEMENTS = os.path.join(DIR, "data", "paper_settlements.jsonl")
 OUT_DIR = os.path.join(DIR, "docs", "figures")
 
 THEMES = {
@@ -35,8 +38,8 @@ THEMES = {
 }
 
 
-def _load():
-    with open(SETTLEMENTS) as f:
+def _load(path):
+    with open(path) as f:
         rows = [json.loads(line) for line in f]
     rows = [r for r in rows if r.get("fair_prob_close") is not None]
     rows.sort(key=lambda r: r["settled_at"])
@@ -115,7 +118,7 @@ def plot_clv(rows, t, path):
 
 
 def main():
-    rows = _load()
+    rows = _load(sys.argv[1] if len(sys.argv) > 1 else SETTLEMENTS)
     os.makedirs(OUT_DIR, exist_ok=True)
     for name, t in THEMES.items():
         plot_cumulative(rows, t, os.path.join(OUT_DIR, f"cumulative_pnl_{name}.png"))
