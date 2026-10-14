@@ -41,7 +41,14 @@ Both figures cover the 1,059 bets with a captured closing line (2 CLV outliers o
 | Spread | 329 | +6.7% | +3.1 pp |
 | Moneyline | 310 | −2.8% | +0.5 pp |
 | Player prop | 36 | +5.6% | +5.5 pp |
-| Team total | 13 | −44.3% | +4.7 pp |
+| Team total | 13 | −44.3% | +4.6 pp |
+
+## Verifying these results
+
+- **Every number above recomputes from the raw log.** `python3 -m analysis.summarize_results` (standard library only) prints the headline table and the market-type breakdown directly from `1000BetsTracked/paper_settlements.jsonl`.
+- **The raw records are public.** [`1000BetsTracked/`](1000BetsTracked/) holds every placement, closing-line capture, and settlement, with field definitions in its README.
+- **Each bet can be checked against public data.** Every record carries the venue's market ID (e.g. Kalshi ticker `KXKBOSPREAD-26JUN070400KIWDOO-KIW3`), the placement timestamp, the fill price, and the order-book levels it walked. Kalshi and Polymarket publish market price and trade history, and game results are public, so any bet's price and outcome can be confirmed independently.
+- **What cannot be verified.** These are paper fills recorded by the engine itself, and this snapshot was committed after the trading period ended, so it is not a pre-registered record. Pinnacle closing prices come from a paid API and are not independently reproducible.
 
 ## How it works
 
@@ -81,7 +88,7 @@ The scanner targets the 0.5–3 h pregame window, where news-driven moves on Pin
 | `pmev/execution/` | Paper-trading simulator and gated real-money tracker |
 | `pmev/adapters/` | Per-venue normalization, fee models, and trade clients |
 | `pmev/dashboard.py` | Flask dashboard (live EV, paper, real) |
-| `analysis/` | Bias estimation, haircut backtest, threshold sweeps, simulations |
+| `analysis/` | Results summary and figures, bias estimation, haircut backtest, threshold sweeps, simulations |
 | `1000BetsTracked/` | Static snapshot of the paper-trade history behind the results above |
 | `deploy/` | systemd units (Linux/VPS) and launchd agents (always-on Mac) for the pollers and dashboard |
 | `tests/` | Unit and integration tests (pytest) |
