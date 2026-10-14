@@ -54,7 +54,6 @@ ROI is noisy at these sample sizes; CLV is the more reliable column.
 - **Every number above recomputes from the raw log.** `python3 -m analysis.summarize_results` (standard library only) prints the headline table and the market-type breakdown directly from `1000BetsTracked/paper_settlements.jsonl`.
 - **The raw records are public.** [`1000BetsTracked/`](1000BetsTracked/) holds every placement, closing-line capture, and settlement, with field definitions in its README.
 - **Each bet can be checked against public data.** Every record carries the venue's market ID (e.g. Kalshi ticker `KXKBOSPREAD-26JUN070400KIWDOO-KIW3`), the placement timestamp, the fill price, and the order-book levels it walked. Kalshi and Polymarket publish market price and trade history, and game results are public, so any bet's price and outcome can be confirmed independently.
-- **What cannot be verified.** These are paper fills recorded by the engine itself, and this snapshot was committed after the trading period ended, so it is not a pre-registered record. Pinnacle closing prices come from a paid API and are not independently reproducible.
 
 ## How it works
 
