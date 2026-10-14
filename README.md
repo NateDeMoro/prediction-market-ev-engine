@@ -6,7 +6,7 @@ A real-time engine that finds positive-expected-value bets on U.S. sports predic
 
 ## Results
 
-Paper trading on a simulated $5,000 bankroll at quarter-Kelly (average stake $30). Fees are included in every stake.
+Paper trading on a simulated $5,000 bankroll at quarter-Kelly (average stake $30). Fees are included in every stake. Data and record schemas are in [`1000BetsTracked/`](1000BetsTracked/).
 
 | Metric | Value |
 |---|---|
@@ -82,6 +82,7 @@ The scanner targets the 0.5–3 h pregame window, where news-driven moves on Pin
 | `pmev/adapters/` | Per-venue normalization, fee models, and trade clients |
 | `pmev/dashboard.py` | Flask dashboard (live EV, paper, real) |
 | `analysis/` | Bias estimation, haircut backtest, threshold sweeps, simulations |
+| `1000BetsTracked/` | Static snapshot of the paper-trade history behind the results above |
 | `deploy/` | systemd units (Linux/VPS) and launchd agents (always-on Mac) for the pollers and dashboard |
 | `tests/` | Unit and integration tests (pytest) |
 

@@ -2,8 +2,8 @@
 Render the README result figures from the paper-trade settlement history.
 
 use when:
-  Refreshing docs/figures/ from the paper-trade history in data/
-  (or any settlements file passed as the first argument).
+  Refreshing docs/figures/ from the 1000BetsTracked/ snapshot (or any
+  settlements file passed as the first argument, e.g. data/paper_settlements.jsonl).
   Read-only on the data; writes PNGs only.
 
 Figures (each in a light and a dark variant for GitHub's theme switch):
@@ -27,7 +27,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SETTLEMENTS = os.path.join(DIR, "data", "paper_settlements.jsonl")
+SETTLEMENTS = os.path.join(DIR, "1000BetsTracked", "paper_settlements.jsonl")
 OUT_DIR = os.path.join(DIR, "docs", "figures")
 
 THEMES = {
