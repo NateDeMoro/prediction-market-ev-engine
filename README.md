@@ -2,11 +2,9 @@
 
 A real-time engine that finds positive-expected-value bets on U.S. sports prediction markets (Kalshi, Polymarket US) by pricing them against Pinnacle, the sharpest sportsbook. It devigs Pinnacle's lines into fair probabilities, walks each prediction market's order book under that venue's actual fee model, sizes positions with fractional Kelly, and grades every bet against the closing line.
 
-### Result summary
+## Results
 
 Across 1,116 paper bets, the engine beat Pinnacle's closing price by +1.9 percentage points on average (84% of bets); realized P&L is within normal variance.
-
-## Results
 
 Paper trading on a simulated $5,000 bankroll at quarter-Kelly (average stake $30). Fees are included in every stake. Data and record schemas are in [`1000BetsTracked/`](1000BetsTracked/).
 
