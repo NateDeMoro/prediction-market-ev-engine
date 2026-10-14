@@ -31,9 +31,13 @@ Paper trading on a simulated $5,000 bankroll at quarter-Kelly (average stake $30
 
 Both figures cover the 1,059 bets with a captured closing line (2 CLV outliers outside the −10 to +15 pp axis are omitted from the histogram).
 
-**Why CLV is the primary metric.** Win/loss outcomes on ~1,100 bets are dominated by variance. If every bet were priced exactly at its closing fair, total P&L would have an expected value of +$1,456 and a standard deviation of about $1,650, so a 95% range of outcomes runs from roughly −$1,800 to +$4,700. The realized −$353 sits well inside that range. P&L alone cannot yet distinguish this strategy from break-even or from +4.5%. Closing-line value converges far faster. If a bet is priced better than the market's final consensus, it is +EV in expectation regardless of how the game ends. The CLV estimate is tight and well above zero, and the P&L shortfall is consistent with ordinary variance.
+### Why CLV is the primary metric
 
-**By market type** (ROI is noisy at these sample sizes; CLV is the more reliable column):
+Win/loss outcomes on ~1,100 bets are dominated by variance. If every bet were priced exactly at its closing fair, total P&L would have an expected value of +$1,456 and a standard deviation of about $1,650, so a 95% range of outcomes runs from roughly −$1,800 to +$4,700. The realized −$353 sits well inside that range. P&L alone cannot yet distinguish this strategy from break-even or from +4.5%. Closing-line value converges far faster. If a bet is priced better than the market's final consensus, it is +EV in expectation regardless of how the game ends. The CLV estimate is tight and well above zero, and the P&L shortfall is consistent with ordinary variance.
+
+### By market type
+
+ROI is noisy at these sample sizes; CLV is the more reliable column.
 
 | Market | Bets | ROI | Mean CLV |
 |---|---|---|---|
