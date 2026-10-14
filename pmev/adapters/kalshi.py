@@ -15,6 +15,8 @@ import re
 
 import requests
 
+import pmev_pricing as _pp
+
 from .common import (
     NormalizedMarket,
     canonical_stat,
@@ -382,7 +384,7 @@ def fee_on_stake_per_share(price):
     per trade) is ignored here — a second-order effect that averages out over
     many-share fills and is immaterial to EV / Kelly math.
     """
-    return FEE_RATE * price * (1.0 - price)
+    return _pp.quadratic_fee(FEE_RATE, price)
 
 
 def taker_fee_per_share(price, fair_prob):
@@ -390,6 +392,11 @@ def taker_fee_per_share(price, fair_prob):
     deterministic (paid regardless of outcome), so `fair_prob` is unused —
     kept in the signature for adapter-interface symmetry."""
     return fee_on_stake_per_share(price)
+
+
+# Lets the C++ ladder walk use its built-in quadratic fee instead of calling
+# back into Python per level (see pmev.matching.ev.walk_ladder).
+taker_fee_per_share.fee_rate = FEE_RATE
 
 
 # ---------------------------------------------------------------------------

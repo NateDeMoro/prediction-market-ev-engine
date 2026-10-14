@@ -25,6 +25,9 @@ __pycache__/
 .venv/
 venv/
 
+# C++ build output
+build/
+
 # macOS
 .DS_Store
 

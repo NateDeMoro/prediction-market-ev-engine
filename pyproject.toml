@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=61"]
-build-backend = "setuptools.build_meta"
+requires = ["scikit-build-core>=0.10", "pybind11>=3,<4"]
+build-backend = "scikit_build_core.build"
 
 [project]
 name = "pmev"
@@ -8,12 +8,6 @@ version = "0.1.0"
 description = "Multi-book +EV scanner (Pinnacle-devigged) for Kalshi and Polymarket."
 requires-python = ">=3.9"
 
-[tool.setuptools]
-packages = [
-    "pmev",
-    "pmev.core",
-    "pmev.matching",
-    "pmev.pollers",
-    "pmev.execution",
-    "pmev.adapters",
-]
+[tool.scikit-build]
+wheel.packages = ["pmev"]   # one tree: pulls in core, matching, pollers, execution, adapters
+build-dir = "build/{wheel_tag}"

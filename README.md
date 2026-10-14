@@ -2,6 +2,8 @@
 
 A real-time engine that finds positive-expected-value bets on U.S. sports prediction markets (Kalshi, Polymarket US) by pricing them against Pinnacle, the sharpest sportsbook. It devigs Pinnacle's lines into fair probabilities, walks each prediction market's order book under that venue's actual fee model, sizes positions with fractional Kelly, and grades every bet against the closing line.
 
+The pricing core (odds conversion, devigging, fee models, ladder walk, edge gate, Kelly sizing) is C++17, exposed to Python via pybind11; see `cpp/`.
+
 ## Results
 
 Across 1,116 paper bets, the engine beat Pinnacle's closing price by +1.9 percentage points on average (84% of bets); realized P&L is within normal variance.
@@ -102,6 +104,7 @@ All tunables (enabled markets, edge floors, fee rates, bankroll and risk caps, t
 
 ```bash
 pip3 install requests flask
+pip3 install .                        # builds the C++ pricing core; re-run after editing cpp/
 cp deploy/env.example .env            # set PINNACLE_API_KEY
 python3 -m pmev.pollers.pinnacle      # each poller in its own shell
 python3 -m pmev.pollers.kalshi
@@ -114,6 +117,7 @@ python3 -m pmev.dashboard             # http://127.0.0.1:5055
 ```bash
 uv venv --python 3.12 .venv
 uv pip install -p .venv requests flask cryptography numpy pytest
+uv pip install -p .venv .                    # builds the C++ pricing core; re-run after editing cpp/
 cp deploy/env.example .env && chmod 600 .env
 ./deploy/launchd/install.sh                  # loads all four agents; re-run after editing a plist
 ```

@@ -30,6 +30,8 @@ import re
 
 import requests
 
+import pmev_pricing as _pp
+
 from .common import NormalizedMarket
 from pmev import config
 
@@ -245,7 +247,7 @@ def fee_on_stake_per_share(price):
     """Taker fee paid upfront at fill per share: 0.03 * P * (1-P). Symmetric in
     P, so the same formula applies to YES and NO buys (price = whatever the
     trader pays per share on their side)."""
-    return FEE_RATE * price * (1.0 - price)
+    return _pp.quadratic_fee(FEE_RATE, price)
 
 
 def taker_fee_per_share(price, fair_prob):
@@ -253,6 +255,11 @@ def taker_fee_per_share(price, fair_prob):
     deterministic (paid regardless of outcome), so `fair_prob` is unused —
     kept in the signature for adapter-interface symmetry."""
     return fee_on_stake_per_share(price)
+
+
+# Lets the C++ ladder walk use its built-in quadratic fee instead of calling
+# back into Python per level (see pmev.matching.ev.walk_ladder).
+taker_fee_per_share.fee_rate = FEE_RATE
 
 
 # ---------------------------------------------------------------------------
