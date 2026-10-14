@@ -1,85 +1,110 @@
 # prediction-market-ev-engine
 
-A multi-book +EV scanner for U.S.-legal sports prediction markets. It treats Pinnacle as the sharp reference book, devigs its 2-way lines into a fair price, then walks the live YES-ask ladder on each soft book (Kalshi, Polymarket US) under that book's actual fee model to surface positive-expected-value bets. It paper-trades every signal and, when explicitly enabled, auto-places real money under hard risk caps.
+A real-time engine that finds positive-expected-value bets on U.S. sports prediction markets (Kalshi, Polymarket US) by pricing them against Pinnacle, the sharpest sportsbook. It devigs Pinnacle's lines into fair probabilities, walks each prediction market's order book under that venue's actual fee model, sizes positions with fractional Kelly, and grades every bet against the closing line.
 
-## What it does
+**Headline result (1,116 settled paper bets, Apr 25 – Jun 13, 2026):** bets beat Pinnacle's closing fair price by **+1.9 percentage points on average (95% CI 1.7–2.1), and 84% of bets beat the close.** Realized P&L was −1.1% of stake, about 1.1 standard deviations below the closing-line expectation of +4.5%, which is within noise at this sample size.
 
-1. Three pollers snapshot each book to JSONL files under `data/` — Pinnacle every 15s (its snapshot is the only price-accuracy risk), the soft books every 60s. Each snapshot gets a `.meta.json` sidecar recording cycle/write timing and the cycle's 429 count.
-2. The matcher pairs each soft-book market with its Pinnacle counterpart across moneyline, spread, total, team-total, the 1H/2H half-point variants, and player props.
-3. Pinnacle's 2-way price is devigged multiplicatively to a no-vig fair probability, then shrunk by a small variance-proportional calibration haircut (`config.haircut_fair`, tuned by `HAIRCUT_K`) before any EV/Kelly math.
-4. The scanner walks the soft book's YES-ask ladder, applies the book's fee rate (`config.PER_BOOK_FEE_RATE`: Kalshi 7%, Polymarket 3%), and computes per-share EV against a per-(book, market-type) edge floor.
-5. The dashboard or CLI surfaces the best opportunities; the paper tracker simulates fills with fractional-Kelly sizing, and the real tracker optionally places live orders.
+## Results
 
-## Layout
+Paper trading on a simulated $5,000 bankroll at quarter-Kelly (average stake $30). Fees are included in every stake.
 
-| Path | Description |
-|------|-------------|
-| `pmev/config.py` | Single source of truth for every tunable: market enablement, edge thresholds, fee rates, bankroll/risk caps, timing, feature flags, file paths. |
-| `pmev/pollers/pinnacle.py` | Sharp-book poller. Pregame + live matchups across active sports every 15s. |
-| `pmev/core/pinnacle_client.py` | Low-level Pinnacle read client shared by the poller and the engine's decision-time re-fetch; `market_to_row` is the canonical snapshot-row schema. |
-| `pmev/pollers/kalshi.py` | Kalshi sports poller (moneyline, spread, total, team-total, props) inside a 24h window. |
-| `pmev/pollers/polymarket.py` | Polymarket US poller — full-game moneyline / spread / total only. |
-| `pmev/core/io.py` | Shared poller plumbing: logging, atomic writes, snapshot rotation + `.meta.json` sidecars, SIGTERM/shutdown, cycle pacing, the shared `RateGate` (min-interval spacing + 429 backoff), and snapshot-freshness checks. |
-| `pmev/matching/matcher.py` | Book-agnostic Pinnacle ↔ soft-book pairing across all market types and periods. |
-| `pmev/core/devig.py` | Multiplicative devigging of 2-way Pinnacle lines. |
-| `pmev/matching/ev.py` | One-shot CLI (`python3 -m pmev.matching.ev`) that prints the single best +EV opportunity across all books; also owns the shared EV math (`evaluate` / `walk_ladder`) and the match→devig→haircut candidate pipeline. |
-| `pmev/engine.py` | Headless scan pipeline (`scan()`): freshness gate → match → live ladder fetch → `evaluate` → rank. Side-effect-free — returns ranked rows plus a `placements` list the caller (dashboard or CLI) acts on. Owns the decision-time Pinnacle re-fetch that re-validates every placement's fair live before betting. |
-| `pmev/dashboard.py` | Flask dashboard at `127.0.0.1:5055`. Tabs: Live EV (`/`), Paper (`/paper`), Real Trading (`/real`), each with a `v{APP_VERSION}` badge to confirm a deploy is live. Event-triggered: re-runs `engine.scan()` when a poller writes a new snapshot, then places from the result. A Poll-time column reads each book's sidecar so stale-line decisions trace back to the cycle that produced them. |
-| `pmev/execution/paper.py` | Append-only paper-trading sim: fractional-Kelly sizing, upfront-fee application, settlement polling (incl. Kalshi scalar payouts), CLV close-capture, dual EV-basis reporting, replay. |
-| `pmev/execution/real.py` | Real-money tracker. $1000 bankroll, per-book balances, $30/bet cap, -$100 daily halt, gated on `REAL_TRADING_ENABLED`. |
-| `pmev/adapters/` | Per-book normalization, ladder fetch, fee model, and authenticated trade clients (`*_trade.py`). New books drop in here and register in `__init__.py`. |
-| `analysis/` | Bias estimation, simulations, haircut backtests, threshold sweeps, latency planning. |
-| `diagnostics/` | Match-rate audits and miss-debug helpers for spot-checking the matcher. |
-| `1000BetsTracked/` | Static snapshot of paper/real trade history pulled from the VPS, for offline backtesting. |
-| `deploy/` | Ubuntu 24.04 VPS setup script and the four systemd units (three pollers + dashboard). |
-| `legacy/` | Earlier single-book scrape + server, kept for reference only. |
+| Metric | Value |
+|---|---|
+| Settled bets | 1,116 (Kalshi 531, Polymarket 585) |
+| Total staked | $33,376 |
+| Mean CLV (closing fair − fill price) | **+1.88 pp**, 95% CI [1.71, 2.05], n = 1,059 with a captured close |
+| Bets that beat the closing line | **83.9%** |
+| Expected profit at closing fair | +$1,456 (+4.5% of stake) |
+| Realized P&L | −$353 (−1.1% of stake) |
+| SD of total P&L under closing fair | ≈ $1,650 |
+| Max drawdown | −$2,274 |
 
-## Getting started
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/figures/clv_histogram_dark.png">
+  <img alt="Histogram of per-bet closing-line value: 84% of 1,059 bets beat the close, mean +1.9 percentage points" src="docs/figures/clv_histogram_light.png">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/figures/cumulative_pnl_dark.png">
+  <img alt="Cumulative realized P&L versus expected P&L at the closing fair price over 1,059 bets: expected rises steadily to $1,456 while realized swings between about -$1,250 and +$1,350 and ends at -$290" src="docs/figures/cumulative_pnl_light.png">
+</picture>
+
+Both figures cover the 1,059 bets with a captured closing line (2 CLV outliers outside the −10 to +15 pp axis are omitted from the histogram).
+
+**Why CLV is the primary metric.** Win/loss outcomes on ~1,100 bets are dominated by variance. If every bet were priced exactly at its closing fair, total P&L would have an expected value of +$1,456 and a standard deviation of about $1,650, so a 95% range of outcomes runs from roughly −$1,800 to +$4,700. The realized −$353 sits well inside that range. P&L alone cannot yet distinguish this strategy from break-even or from +4.5%. Closing-line value converges far faster. If a bet is priced better than the market's final consensus, it is +EV in expectation regardless of how the game ends. The CLV estimate is tight and well above zero, and the P&L shortfall is consistent with ordinary variance.
+
+**By market type** (ROI is noisy at these sample sizes; CLV is the more reliable column):
+
+| Market | Bets | ROI | Mean CLV |
+|---|---|---|---|
+| Total | 428 | −11.7% | +1.6 pp |
+| Spread | 329 | +6.7% | +3.1 pp |
+| Moneyline | 310 | −2.8% | +0.5 pp |
+| Player prop | 36 | +5.6% | +5.5 pp |
+| Team total | 13 | −44.3% | +4.7 pp |
+
+## How it works
+
+1. **Data collection.** Three pollers snapshot every venue to JSONL: Pinnacle every 15 s, Kalshi and Polymarket every 60 s, behind a shared rate gate with 429 backoff.
+2. **Matching.** Each prediction-market contract is paired with its Pinnacle counterpart across moneylines, spreads, totals, team totals, half/period lines, and player props.
+3. **Fair price.** Pinnacle's two-way price is devigged multiplicatively (implied probabilities rescaled to sum to 1), then shrunk toward less confidence by a variance-proportional haircut, `p − k·p(1−p)` with `k = 0.064`.
+4. **Edge.** The scanner walks the contract's YES-ask ladder level by level, applies the venue's fee model (Kalshi 7%, Polymarket 3%), and keeps only fills that clear a per-(venue, market-type) edge floor: 2% for team markets and 4% for player props, where Pinnacle limits are low and quotes noisier.
+5. **Sizing.** Quarter-Kelly on the haircut fair probability, capped per bet.
+6. **Execution safety.** Signals come only from fresh snapshots (Pinnacle ≤ 30 s old), and every placement re-fetches Pinnacle live at decision time so a stale line never reaches an order.
+7. **Grading.** Each open bet captures Pinnacle's closing fair near start time; settlement records P&L, CLV, and fair-line drift. All state is append-only and rebuilt by replay.
+8. **Fill realism check.** About 2 s after each paper fill, the engine re-reads that market's order book and records how many of the claimed shares were still buyable at the same price or better. This is diagnostic only and never feeds back into sizing or placement.
+
+The scanner targets the 0.5–3 h pregame window, where news-driven moves on Pinnacle reach prediction markets with exploitable lag, without competing against sub-second live-arbitrage bots.
+
+## What the data changed
+
+- **Kalshi basketball moneylines disabled:** −$517 over 61 bets, retaining only ~16% of placement edge by close.
+- **Soccer moneylines disabled** on both venues after testing EV-negative in aggregate; other soccer markets are limited to a 14-league whitelist.
+- **Calibration haircut:** `analysis/estimate_bias.py` measures the gap between placement fair and closing fair; `analysis/backtest_haircut.py` replayed every historical bet under the haircut before it was enabled.
+- **Closing-capture window** widened to 15 minutes pre-start to reduce missed closes.
+
+## Limitations
+
+- **Paper fills.** Fills are simulated against the quoted ladder at decision time. Real fill rates, queue position, and slippage are untested at scale; the post-fill re-check (step 8) was added after the results period above to measure how much of each simulated fill was real liquidity.
+- **One reference book.** All edge is measured relative to Pinnacle. If Pinnacle's own line is wrong in the same direction as the prediction market, the engine cannot see it.
+- **Short window.** Seven weeks of data, concentrated in baseball (52% of bets). Differences between sports and market types are not yet statistically distinguishable.
+- **Capacity.** Prediction-market depth at the quoted edge is thin; the average fill was about $30.
+
+## Repository layout
+
+| Path | Contents |
+|---|---|
+| `pmev/pollers/` | Pinnacle, Kalshi, and Polymarket snapshot pollers |
+| `pmev/matching/` | Cross-venue matcher and the shared EV / ladder-walk math |
+| `pmev/core/` | Devig, Pinnacle client, poller I/O and rate limiting |
+| `pmev/engine.py` | Side-effect-free scan pipeline: freshness gate → match → ladder fetch → evaluate → rank |
+| `pmev/execution/` | Paper-trading simulator and gated real-money tracker |
+| `pmev/adapters/` | Per-venue normalization, fee models, and trade clients |
+| `pmev/dashboard.py` | Flask dashboard (live EV, paper, real) |
+| `analysis/` | Bias estimation, haircut backtest, threshold sweeps, simulations |
+| `deploy/` | systemd units (Linux/VPS) and launchd agents (always-on Mac) for the pollers and dashboard |
+| `tests/` | Unit and integration tests (pytest) |
+
+All tunables (enabled markets, edge floors, fee rates, bankroll and risk caps, timing) live in `pmev/config.py`.
+
+## Running it
 
 ```bash
 pip3 install requests flask
-cp deploy/env.example .env            # set PINNACLE_API_KEY (required); others optional
-# run from the repo root so the `pmev` package resolves
-python3 -m pmev.pollers.pinnacle      # in one shell
-python3 -m pmev.pollers.kalshi        # in another
+cp deploy/env.example .env            # set PINNACLE_API_KEY
+python3 -m pmev.pollers.pinnacle      # each poller in its own shell
+python3 -m pmev.pollers.kalshi
 python3 -m pmev.pollers.polymarket
-python3 -m pmev.dashboard             # then open http://127.0.0.1:5055
+python3 -m pmev.dashboard             # http://127.0.0.1:5055
 ```
 
-`python3 -m pmev.matching.ev` is a single-shot alternative that prints the top opportunity and exits. Real-money trading additionally requires `KALSHI_*` / `POLYMARKETUS_*` keys and `REAL_TRADING_ENABLED=1`; see `deploy/env.example` for the full variable set.
-
-## Deployment
-
-### Linux / VPS
-
-`deploy/setup.sh` provisions a fresh Ubuntu 24.04 box (user, firewall, Tailscale, Python deps). The four systemd units in `deploy/systemd/` run the three pollers and the dashboard as services, reading config from an `EnvironmentFile`. The dashboard is reached over Tailscale; only SSH is exposed publicly. Production state lives at `~/Arbitrage_Betting` on the VPS — the local repo is for editing code only.
-
-### macOS (always-on Mac)
-
-`deploy/launchd/` holds the same four services as launchd agents. Run in the repo root:
+`python3 -m pmev.matching.ev` prints the single best current opportunity and exits. Real-money trading is off by default; it requires venue API keys and `REAL_TRADING_ENABLED=1`. To run the four services unattended, use `deploy/systemd/` on Linux (provisioned by `deploy/setup.sh`) or `deploy/launchd/` on macOS:
 
 ```bash
-uv venv --python 3.12 .venv                  # system python3 is too old (3.10+ syntax)
+uv venv --python 3.12 .venv
 uv pip install -p .venv requests flask cryptography numpy pytest
-cp deploy/env.example .env && chmod 600 .env # set PINNACLE_API_KEY
-./deploy/launchd/install.sh                  # load all four agents
+cp deploy/env.example .env && chmod 600 .env
+./deploy/launchd/install.sh                  # loads all four agents; re-run after editing a plist
 ```
 
-launchd has no `EnvironmentFile`, so each agent runs `deploy/launchd/run.sh`, which sources `.env` and execs the module under `.venv`. Agents restart on crash and start at login. `install.sh` is idempotent — re-run it after editing a plist; it waits out launchd's async `bootout` before re-bootstrapping, which otherwise fails with `Input/output error`. Unload with `launchctl bootout gui/$UID/com.pmev.<service>`.
-
-Logging mirrors the systemd units: pollers already write their own `data/<book>.log` via `core/io.py`, so their launchd stdout goes to `/dev/null` to avoid a byte-identical duplicate — only stderr is kept, at `data/<service>.err.log`, since crash tracebacks never reach the app logger. The dashboard has no log file of its own, so both streams go to `data/ev-dashboard.log`.
-
-Unlike the VPS, state lives in the repo's own `data/`. Confirm the machine never sleeps (`pmset -g | grep sleep`), or the pollers stall.
-
-## Design notes
-
-- The scanner's surfacing window is 0.5h–3h pregame (`config.MIN_HOURS_TO_START` / `MAX_HOURS_TO_START`) — where news-driven line moves on Pinnacle create tradeable lag on soft books without competing against sub-second live-arb bots.
-- Edge floors are per-(book, market-type) in `config.EDGE_FLOOR_PCT`. Player props use a higher gate (`PROP_MIN_EDGE`, default 4%) than team markets (2%) because Pinnacle's prop max-stake is small, so prop quotes are noisier.
-- Fees are modeled once in `config.PER_BOOK_FEE_RATE` and consumed by both the edge formula and the read adapters; change a rate in one place.
-- Snapshots are age-gated before any signal is acted on, two-tier by role: Pinnacle's snapshot fair is used for display/ranking and is gated tight (`MAX_PIN_SNAPSHOT_AGE_SEC`, 30s), but every placed bet re-fetches its Pinnacle line live at decision time (#6b, `engine._refresh_fair`), so a stale snapshot never reaches a placement; soft ladders are likewise re-fetched live, making their snapshot age only a coverage/liveness check, gated loose (`MAX_SOFT_SNAPSHOT_AGE_SEC`, 120s). The scanner and dashboard share this check via `data_utils.stale_snapshot_reason`.
-- Market enablement is config-gated via `config.market_enabled()`. Soccer moneylines (both books) and Kalshi basketball moneylines are off after backtesting; soccer is further restricted to a 14-league whitelist (`adapters/common.py` `SHARP_SOCCER_LEAGUES`).
-- Real-money trading is off by default and gated on `REAL_TRADING_ENABLED=1`, with a $30 per-bet cap and a -$100 daily-loss halt.
-- Tracker accuracy is graded on two footings, both summed over the same closed-bet subset so they're directly comparable: realized P&L against the placement-basis edge (`net_ev`), and closing-line value — each open bet captures Pinnacle's closing fair near kickoff, yielding per-bet CLV and a close-basis edge (`net_ev_close`). The closing fair is put on the same haircut basis as the placement fair for the EV/Fair-Δ comparison; CLV uses the raw closing line (value vs the price paid).
-- Kalshi markets that resolve `scalar` (postponed/cancelled past the settlement window, or ties → a fractional per-share payout) are settled at that payout rather than left open indefinitely.
-- Paper fills are graded for realism by a post-fill ladder re-check: ~2s after each paper placement the engine re-reads that market's book and records how many of the shares it claimed to take were still buyable at the same price or better (`config.PAPER_REVERIFY_*`, `data/paper_reverify.jsonl`, surfaced as Fill survival on `/paper`). A simulated fill is only as honest as the liquidity behind it, and the decision-time ladder proves nothing about the moment after — this is the evidence for whether paper results transfer to real money. Price improvement counts as survival; a check that lands outside its delay tolerance is recorded as skipped rather than counted, so a starved worker can't inflate the rate. Diagnostic only — it never feeds back into sizing or placement gating.
-- All tracker state is append-only JSONL; in-memory state is reconstructed by replaying it on import — nothing is mutated in place.
+The launchd agents restart on crash and start at login; keep the machine from sleeping (`pmset -g | grep sleep`) or the pollers stall.
