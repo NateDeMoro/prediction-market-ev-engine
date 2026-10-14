@@ -2,7 +2,7 @@
 
 A real-time engine that finds positive-expected-value bets on U.S. sports prediction markets (Kalshi, Polymarket US) by pricing them against Pinnacle, the sharpest sportsbook. It devigs Pinnacle's lines into fair probabilities, walks each prediction market's order book under that venue's actual fee model, sizes positions with fractional Kelly, and grades every bet against the closing line.
 
-**Headline result (1,116 settled paper bets, Apr 25 – Jun 13, 2026):** bets beat Pinnacle's closing fair price by **+1.9 percentage points on average (95% CI 1.7–2.1), and 84% of bets beat the close.** Realized P&L was −1.1% of stake, about 1.1 standard deviations below the closing-line expectation of +4.5%, which is within noise at this sample size.
+**Result:** across 1,116 paper bets, the engine beat Pinnacle's closing price by +1.9 percentage points on average (84% of bets); realized P&L is within normal variance.
 
 ## Results
 
