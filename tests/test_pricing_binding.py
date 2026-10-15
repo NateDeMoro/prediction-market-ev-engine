@@ -364,7 +364,7 @@ def test_evaluate_exact(book, mod, market_type, capsys):
                 got_out = capsys.readouterr().out
                 want, lines = ref_evaluate(ladder, fair, fee, book, market_type)
                 assert got == want
-                assert got_out == "".join(l + "\n" for l in lines)
+                assert got_out == "".join(line + "\n" for line in lines)
 
 
 def test_evaluate_unknown_book_uses_floor_only(capsys):
@@ -399,7 +399,8 @@ def test_adapter_fee_rate_matches_config():
 
 @pytest.mark.parametrize("mod", [kalshi, polymarket])
 def test_native_and_callback_paths_agree(mod):
-    equiv = lambda price, fair: mod.FEE_RATE * price * (1.0 - price)  # no fee_rate attribute
+    def equiv(price, fair):  # no fee_rate attribute
+        return mod.FEE_RATE * price * (1.0 - price)
     assert not hasattr(equiv, "fee_rate")
     for ladder in LADDERS:
         for fair in FAIRS:
@@ -420,7 +421,8 @@ def test_adapter_fee_rate_reproduces_callable(mod):
 @pytest.mark.parametrize("mod", [kalshi, polymarket])
 def test_patched_fee_rate_does_not_diverge(mod, monkeypatch):
     monkeypatch.setattr(mod, "FEE_RATE", mod.FEE_RATE * 2)
-    equiv = lambda price, fair: mod.FEE_RATE * price * (1.0 - price)
+    def equiv(price, fair):
+        return mod.FEE_RATE * price * (1.0 - price)
     assert ev._native_fee_rate(mod.taker_fee_per_share) is None
     for ladder in LADDERS:
         for fair in FAIRS:
