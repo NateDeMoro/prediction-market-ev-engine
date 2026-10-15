@@ -92,15 +92,18 @@ The scanner targets the 0.5–3 h pregame window, where news-driven moves on Pin
 | `pmev/engine.py` | Side-effect-free scan pipeline: freshness gate → match → ladder fetch → evaluate → rank |
 | `pmev/execution/` | Paper-trading simulator and gated real-money tracker |
 | `pmev/adapters/` | Per-venue normalization, fee models, and trade clients |
+| `cpp/` | C++17 pricing core (`pmev_pricing` extension): odds, devig, fees, ladder walk, edge gate, Kelly; pybind11 bindings and GoogleTest suite |
 | `pmev/dashboard.py` | Flask dashboard (live EV, paper, real) |
 | `analysis/` | Results summary and figures, bias estimation, haircut backtest, threshold sweeps, simulations |
 | `1000BetsTracked/` | Static snapshot of the paper-trade history behind the results above |
 | `deploy/` | systemd units (Linux/VPS) and launchd agents (always-on Mac) for the pollers and dashboard |
-| `tests/` | Unit and integration tests (pytest) |
+| `tests/` | Unit and integration tests (pytest), including C++/Python parity tests for the pricing core |
 
 All tunables (enabled markets, edge floors, fee rates, bankroll and risk caps, timing) live in `pmev/config.py`.
 
 ## Running it
+
+Requires Python 3.12+ and a C++17 compiler (the pricing core is built from source by `pip install .`).
 
 ```bash
 pip3 install requests flask

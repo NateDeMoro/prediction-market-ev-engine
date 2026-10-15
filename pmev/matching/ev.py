@@ -87,8 +87,9 @@ def walk_ladder(ladder, fair_prob, fee_fn):
     """Consume levels while expected EV/share > 0. Returns per-level + totals.
 
     `fee_fn(price, fair_prob)` returns the expected per-share fee in dollars
-    at the given fill price. A fee_fn with a numeric `fee_rate` attribute is
-    walked entirely in C++; any other callable is called back once per level.
+    at the given fill price. A fee_fn with a numeric `fee_rate` attribute that
+    still matches rate*p*(1-p) (see _native_fee_rate) is walked entirely in
+    C++; any other callable is called back once per level.
     """
     rate = _native_fee_rate(fee_fn)
     if rate is not None:
