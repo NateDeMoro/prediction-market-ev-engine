@@ -64,12 +64,23 @@ def load_latest_snapshot(dir_path):
 # Ladder walk (book fee model plugged in via fee_fn)
 # ---------------------------------------------------------------------------
 
+_FEE_RATE_PROBES = (0.1, 0.37, 0.5, 0.9)
+
+
 def _native_fee_rate(fee_fn):
     """The fee_rate attribute of a quadratic-fee callable (both adapters'
-    taker_fee_per_share carry one), else None. Use when: choosing between the
-    C++ built-in fee path and the per-level Python callback path."""
+    taker_fee_per_share carry one), else None. The tag is honoured only while
+    fee_fn still returns rate*p*(1-p) at a few probe prices, so a patched
+    FEE_RATE or a non-quadratic fee falls back to the callback instead of
+    silently diverging. Use when: choosing between the C++ built-in fee path
+    and the per-level Python callback path."""
     rate = getattr(fee_fn, "fee_rate", None)
-    return rate if isinstance(rate, (int, float)) else None
+    if not isinstance(rate, (int, float)):
+        return None
+    for p in _FEE_RATE_PROBES:
+        if fee_fn(p, p) != _pp.quadratic_fee(rate, p):
+            return None
+    return rate
 
 
 def walk_ladder(ladder, fair_prob, fee_fn):

@@ -409,6 +409,37 @@ def test_native_and_callback_paths_agree(mod):
         assert ev.breakeven_fair(p, mod.taker_fee_per_share) == ev.breakeven_fair(p, equiv)
 
 
+@pytest.mark.parametrize("mod", [kalshi, polymarket])
+def test_adapter_fee_rate_reproduces_callable(mod):
+    fn = mod.taker_fee_per_share
+    for p in CENT_PRICES + [0.0, 0.001, 0.4999, 0.999, 1.0]:
+        for fair in (0.0, p, 1.0):
+            assert fn(p, fair) == fn.fee_rate * p * (1.0 - p)
+
+
+@pytest.mark.parametrize("mod", [kalshi, polymarket])
+def test_patched_fee_rate_does_not_diverge(mod, monkeypatch):
+    monkeypatch.setattr(mod, "FEE_RATE", mod.FEE_RATE * 2)
+    equiv = lambda price, fair: mod.FEE_RATE * price * (1.0 - price)
+    assert ev._native_fee_rate(mod.taker_fee_per_share) is None
+    for ladder in LADDERS:
+        for fair in FAIRS:
+            assert ev.walk_ladder(ladder, fair, mod.taker_fee_per_share) == \
+                ev.walk_ladder(ladder, fair, equiv)
+    for p in CENT_PRICES:
+        assert ev.breakeven_fair(p, mod.taker_fee_per_share) == ev.breakeven_fair(p, equiv)
+
+
+def test_mismatched_fee_rate_tag_falls_back_to_callback():
+    def rounded(price, fair):
+        return math.ceil(0.07 * price * (1.0 - price) * 100) / 100
+    rounded.fee_rate = 0.07
+    assert ev._native_fee_rate(rounded) is None
+    for ladder in LADDERS:
+        for fair in FAIRS:
+            assert ev.walk_ladder(ladder, fair, rounded) == ref_walk_ladder(ladder, fair, rounded)
+
+
 def test_non_numeric_fee_rate_attribute_falls_back_to_callback():
     class Weird:
         fee_rate = "n/a"
