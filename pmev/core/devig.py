@@ -3,7 +3,32 @@ paper_tracker.py (CLV capture), and any future analytics.
 
 Open when: changing how American odds are converted or how vig is removed
 (e.g. switching from multiplicative to power / Shin / logit devig).
+
+The arithmetic lives in C++ (cpp/src/pricing.cpp, module pmev_pricing); these
+wrappers keep None / str / float coercion and the public signatures.
 """
+import pmev_pricing as _pp
+
+
+def _coerce(a):
+    """float(a), or None for None / non-numeric input."""
+    if a is None:
+        return None
+    try:
+        return float(a)
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_legs(american_prices):
+    """Coerce every leg to float; None if any leg is None or non-numeric."""
+    legs = []
+    for p in american_prices:
+        v = _coerce(p)
+        if v is None:
+            return None
+        legs.append(v)
+    return legs
 
 
 def american_to_decimal(a):
@@ -11,19 +36,10 @@ def american_to_decimal(a):
     denominator so both +N and -N are handled symmetrically. Returns None on
     a=0, non-numeric input, or 0 < a < 100 (non-standard sub-100 odds that
     would silently invert the implied probability if allowed through)."""
+    a = _coerce(a)
     if a is None:
         return None
-    try:
-        a = float(a)
-    except (TypeError, ValueError):
-        return None
-    if a == 0:
-        return None
-    if 0 < a < 100:
-        return None
-    if a >= 100:
-        return 1.0 + a / 100.0
-    return 1.0 + 100.0 / abs(a)
+    return _pp.american_to_decimal(a)
 
 
 def devig_multiplicative(american_prices):
@@ -33,30 +49,19 @@ def devig_multiplicative(american_prices):
     is degenerate (all zeros, malformed). Callers must handle None — a return
     of None means no reliable fair prob could be derived from this book.
     """
-    probs = []
-    for p in american_prices:
-        d = american_to_decimal(p)
-        if d is None or d <= 0:
-            return None
-        probs.append(1.0 / d)
-    total = sum(probs)
-    if total <= 0:
+    legs = _coerce_legs(american_prices)
+    if legs is None:
         return None
-    return [p / total for p in probs]
+    return _pp.devig_multiplicative(legs)
 
 
 def _implied_probs(american_prices):
     """American prices -> list of raw implied probs (1/decimal), or None if any
     leg is degenerate. Sum is the overround (>1 for a normal vigged book)."""
-    probs = []
-    for p in american_prices:
-        d = american_to_decimal(p)
-        if d is None or d <= 0:
-            return None
-        probs.append(1.0 / d)
-    if not probs or sum(probs) <= 0:
+    legs = _coerce_legs(american_prices)
+    if legs is None:
         return None
-    return probs
+    return _pp.implied_probs(legs)
 
 
 def devig_power(american_prices, _tol=1e-12, _iters=200):
@@ -70,31 +75,10 @@ def devig_power(american_prices, _tol=1e-12, _iters=200):
     Returns a list of fair probabilities summing to 1, or None on degenerate
     input. Callers must handle None.
     """
-    probs = _implied_probs(american_prices)
-    if probs is None:
+    legs = _coerce_legs(american_prices)
+    if legs is None:
         return None
-    # f(k) = Σ pᵢᵏ - 1 is strictly decreasing in k (every pᵢ < 1): f(0)=n-1>0,
-    # f(∞)→-1. Bisect for the unique root. lo=0 covers the no-vig/arb case (k<1).
-    lo, hi = 0.0, 1.0
-    while sum(p ** hi for p in probs) > 1.0:
-        hi *= 2.0
-        if hi > 1e6:
-            return None
-    for _ in range(_iters):
-        mid = 0.5 * (lo + hi)
-        s = sum(p ** mid for p in probs)
-        if abs(s - 1.0) < _tol:
-            break
-        if s > 1.0:
-            lo = mid
-        else:
-            hi = mid
-    k = 0.5 * (lo + hi)
-    fair = [p ** k for p in probs]
-    total = sum(fair)
-    if total <= 0:
-        return None
-    return [f / total for f in fair]  # renormalize away residual bisection drift
+    return _pp.devig_power(legs, _tol, _iters)
 
 
 def devig_shin(american_prices, _tol=1e-12, _iters=200):
@@ -110,38 +94,10 @@ def devig_shin(american_prices, _tol=1e-12, _iters=200):
     Returns a list of fair probabilities summing to 1, or None on degenerate
     input. Callers must handle None.
     """
-    probs = _implied_probs(american_prices)
-    if probs is None:
+    legs = _coerce_legs(american_prices)
+    if legs is None:
         return None
-    booksum = sum(probs)
-
-    def fairs(z):
-        denom = 2.0 * (1.0 - z)
-        out = []
-        for pi in probs:
-            root = (z * z + 4.0 * (1.0 - z) * pi * pi / booksum) ** 0.5
-            out.append((root - z) / denom)
-        return out
-
-    # g(z) = Σ fairᵢ(z) - 1 is decreasing on [0,1): g(0)=sqrt(booksum)-1>0 for a
-    # vigged book, g→<0 as z→1. Bisect for the unique root.
-    lo, hi = 0.0, 1.0 - 1e-9
-    if sum(fairs(lo)) <= 1.0:
-        return devig_multiplicative(american_prices)  # no/negative vig -> no Shin
-    for _ in range(_iters):
-        mid = 0.5 * (lo + hi)
-        s = sum(fairs(mid))
-        if abs(s - 1.0) < _tol:
-            break
-        if s > 1.0:
-            lo = mid
-        else:
-            hi = mid
-    fair = fairs(0.5 * (lo + hi))
-    total = sum(fair)
-    if total <= 0:
-        return None
-    return [f / total for f in fair]  # renormalize away residual bisection drift
+    return _pp.devig_shin(legs, _tol, _iters)
 
 
 def synthesize_combined_american(american_prices):
@@ -152,15 +108,7 @@ def synthesize_combined_american(american_prices):
 
     Returns None on degenerate input or combined implied prob >= 1.
     """
-    combined_prob = 0.0
-    for a in american_prices:
-        d = american_to_decimal(a)
-        if d is None or d <= 0:
-            return None
-        combined_prob += 1.0 / d
-    if combined_prob <= 0 or combined_prob >= 1:
+    legs = _coerce_legs(american_prices)
+    if legs is None:
         return None
-    combined_decimal = 1.0 / combined_prob
-    if combined_decimal >= 2.0:
-        return int(round((combined_decimal - 1.0) * 100.0))
-    return int(round(-100.0 / (combined_decimal - 1.0)))
+    return _pp.synthesize_combined_american(legs)

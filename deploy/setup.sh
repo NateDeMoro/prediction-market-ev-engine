@@ -10,7 +10,7 @@ REPO_DIR="/home/${ARB_USER}/Arbitrage_Betting"
 
 echo "==> apt update + base packages"
 apt-get update -y
-apt-get install -y python3 python3-pip git ufw curl
+apt-get install -y python3 python3-pip python3-dev build-essential git ufw curl
 
 echo "==> create unprivileged user ${ARB_USER}"
 if ! id "${ARB_USER}" >/dev/null 2>&1; then
@@ -35,9 +35,11 @@ echo "  1. sudo tailscale up        # prints a URL — open it, auth the box"
 echo "  2. su - ${ARB_USER}         # switch to the arb user"
 echo "  3. ssh-keygen -t ed25519    # add the pubkey as a Deploy Key on GitHub"
 echo "  4. git clone git@github.com:<YOU>/<REPO>.git ${REPO_DIR}"
-echo "  5. scp paper_{trades,settlements,closes}.jsonl from local into ${REPO_DIR}/data/"
-echo "  6. create ${REPO_DIR}/.env  (see deploy/env.example)"
-echo "  7. sudo cp ${REPO_DIR}/deploy/systemd/*.service /etc/systemd/system/"
-echo "  8. sudo systemctl daemon-reload"
-echo "  9. sudo systemctl enable --now pinnacle-poller kalshi-poller polymarket-poller ev-dashboard"
+echo "  5. cd ${REPO_DIR} && sudo pip3 install --break-system-packages .   # builds the C++ pricing core"
+echo "     (re-run after pulling C++ changes under cpp/)"
+echo "  6. scp paper_{trades,settlements,closes}.jsonl from local into ${REPO_DIR}/data/"
+echo "  7. create ${REPO_DIR}/.env  (see deploy/env.example)"
+echo "  8. sudo cp ${REPO_DIR}/deploy/systemd/*.service /etc/systemd/system/"
+echo "  9. sudo systemctl daemon-reload"
+echo " 10. sudo systemctl enable --now pinnacle-poller kalshi-poller polymarket-poller ev-dashboard"
 echo ""

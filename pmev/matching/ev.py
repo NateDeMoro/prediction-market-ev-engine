@@ -25,6 +25,7 @@ from pmev.core.io import snapshot_age_seconds, stale_snapshot_reason
 from pmev.core.devig import american_to_decimal, devig_multiplicative
 from pmev.matching.matcher import match_all_markets, parse_iso
 from pmev import config
+import pmev_pricing as _pp
 
 # Re-export from config so ev_dashboard can still import these from here.
 SNAP_PIN           = config.PIN_SNAPSHOT_DIR
@@ -40,11 +41,7 @@ MAX_HOURS_TO_START = config.MAX_HOURS_TO_START
 
 def price_to_american(price):
     """YES-share price in dollars (0<p<1) -> American odds int."""
-    if price <= 0 or price >= 1:
-        return 0
-    if price <= 0.5:
-        return int(round(100 * (1 - price) / price))
-    return int(round(-100 * price / (1 - price)))
+    return _pp.price_to_american(price)
 
 
 def fmt_book_price(price):
@@ -67,24 +64,37 @@ def load_latest_snapshot(dir_path):
 # Ladder walk (book fee model plugged in via fee_fn)
 # ---------------------------------------------------------------------------
 
+_FEE_RATE_PROBES = (0.1, 0.37, 0.5, 0.9)
+
+
+def _native_fee_rate(fee_fn):
+    """The fee_rate attribute of a quadratic-fee callable (both adapters'
+    taker_fee_per_share carry one), else None. The tag is honoured only while
+    fee_fn still returns rate*p*(1-p) at a few probe prices, so a patched
+    FEE_RATE or a non-quadratic fee falls back to the callback instead of
+    silently diverging. Use when: choosing between the C++ built-in fee path
+    and the per-level Python callback path."""
+    rate = getattr(fee_fn, "fee_rate", None)
+    if not isinstance(rate, (int, float)):
+        return None
+    for p in _FEE_RATE_PROBES:
+        if fee_fn(p, p) != _pp.quadratic_fee(rate, p):
+            return None
+    return rate
+
+
 def walk_ladder(ladder, fair_prob, fee_fn):
     """Consume levels while expected EV/share > 0. Returns per-level + totals.
 
     `fee_fn(price, fair_prob)` returns the expected per-share fee in dollars
-    at the given fill price.
+    at the given fill price. A fee_fn with a numeric `fee_rate` attribute that
+    still matches rate*p*(1-p) (see _native_fee_rate) is walked entirely in
+    C++; any other callable is called back once per level.
     """
-    levels = []
-    total_shares, total_stake, total_ev = 0, 0.0, 0.0
-    for price, qty in ladder:
-        gross = 1.0 - price
-        ev = fair_prob * gross - (1 - fair_prob) * price - fee_fn(price, fair_prob)
-        if ev <= 0:
-            break
-        levels.append((price, qty, ev))
-        total_shares += qty
-        total_stake += qty * price
-        total_ev += qty * ev
-    return total_shares, total_stake, total_ev, levels
+    rate = _native_fee_rate(fee_fn)
+    if rate is not None:
+        return _pp.walk_ladder(ladder, fair_prob, rate)
+    return _pp.walk_ladder_cb(ladder, fair_prob, fee_fn)
 
 
 def breakeven_fair(price, fee_fn):
@@ -93,15 +103,10 @@ def breakeven_fair(price, fee_fn):
     EV(q) = q*(1-p) - (1-q)*p - fee_fn(p, q) is monotonically increasing in q,
     so bisection on [0, 1] converges quickly.
     """
-    lo, hi = 0.0, 1.0
-    for _ in range(40):
-        mid = (lo + hi) / 2
-        ev = mid * (1 - price) - (1 - mid) * price - fee_fn(price, mid)
-        if ev > 0:
-            hi = mid
-        else:
-            lo = mid
-    return (lo + hi) / 2
+    rate = _native_fee_rate(fee_fn)
+    if rate is not None:
+        return _pp.breakeven_fair(price, rate)
+    return _pp.breakeven_fair_cb(price, fee_fn)
 
 
 def evaluate(ladder, fair, fee_fn, book, market_type):
@@ -111,7 +116,7 @@ def evaluate(ladder, fair, fee_fn, book, market_type):
     if it fails any gate (no positive-EV levels, below floor, above ceiling).
     Use when: deciding whether a candidate clears the bar for display or placement.
 
-    Gate sequence (mirrors paper_tracker.maybe_place):
+    Gate sequence (mirrors paper_tracker.maybe_place), run in C++:
       1. walk_ladder — bail if shares == 0 (no profitable levels; near-miss).
       2. config.min_edge_pct(book, market_type, avg_fill) — fee-adjusted floor.
       3. config.SANITY_MAX_EDGE_PCT[_PROP] — ceiling against likely matcher noise.
@@ -119,24 +124,27 @@ def evaluate(ladder, fair, fee_fn, book, market_type):
     if not ladder:
         return None
 
-    shares, stake, exp_profit, levels = walk_ladder(ladder, fair, fee_fn)
-    if shares == 0:
-        return None
-
-    ev_pct = exp_profit / stake * 100 if stake > 0 else 0.0
-    avg_fill = stake / shares
-
-    if ev_pct < config.min_edge_pct(book, market_type, avg_fill):
-        return None
-
+    floor, book_rate, margin = config.edge_gate_inputs(book, market_type)
     is_prop = market_type == "player_prop"
     max_edge = config.SANITY_MAX_EDGE_PCT_PROP if is_prop else config.SANITY_MAX_EDGE_PCT
-    if ev_pct > max_edge:
+
+    rate = _native_fee_rate(fee_fn)
+    gate = (floor, book_rate, margin, max_edge, config.CEILING_LOG_FRAC)
+    if rate is not None:
+        out = _pp.evaluate_core(ladder, fair, rate, *gate)
+    else:
+        out = _pp.evaluate_core_cb(ladder, fair, fee_fn, *gate)
+    verdict, shares, stake, exp_profit, ev_pct, avg_fill, levels = out
+
+    V = _pp.Verdict
+    if verdict in (V.NoLevels, V.BelowFloor):
+        return None
+    if verdict == V.OverCeiling:
         # Likely matcher noise — rejected, but no longer silent so the rate is visible.
         print(f"[evaluate] over-ceiling reject book={book} type={market_type} "
               f"ev={ev_pct:.2f}% ceiling={max_edge:.1f}% avg_fill={avg_fill:.3f}")
         return None
-    if ev_pct >= config.CEILING_LOG_FRAC * max_edge:
+    if verdict == V.AcceptNearCeiling:
         # Accepted, but close enough to the ceiling to be worth flagging.
         print(f"[evaluate] near-ceiling book={book} type={market_type} "
               f"ev={ev_pct:.2f}% ceiling={max_edge:.1f}% avg_fill={avg_fill:.3f}")

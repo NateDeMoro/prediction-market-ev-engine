@@ -32,7 +32,6 @@ Public API:
 import collections
 import fcntl
 import json
-import math
 import os
 import threading
 import time
@@ -43,6 +42,7 @@ from pmev.adapters import adapter_for
 from pmev.adapters.common import fuzzy_match
 from pmev.core.devig import devig_multiplicative, synthesize_combined_american
 from pmev import config
+import pmev_pricing as _pp
 
 PIN_PERIOD_LABEL_TO_INT = {"FULL": 0, "1H": 1, "2H": 2, "F5": 1}
 
@@ -274,30 +274,16 @@ def size_bet(ladder, fair_prob, bankroll, adapter, max_stake=None):
         return None
 
     vwap = pos_stake / pos_shares
-    if vwap <= 0 or vwap >= 1:
+    # Kelly arithmetic (vwap range check through target shares, capped at
+    # pos_shares) runs in C++; None means one of the early-return conditions hit.
+    kelly = _pp.kelly_size(
+        fair_prob, vwap,
+        adapter.fee_on_win_per_share(vwap), adapter.fee_on_stake_per_share(vwap),
+        bankroll, config.KELLY_FRACTION, max_stake, pos_shares,
+    )
+    if kelly is None:
         return None
-
-    net_win = (1 - vwap) - adapter.fee_on_win_per_share(vwap)
-    eff_stake = vwap + adapter.fee_on_stake_per_share(vwap)
-    if net_win <= 0 or eff_stake <= 0:
-        return None
-
-    b = net_win / eff_stake
-    f_full = fair_prob - (1 - fair_prob) / b
-    if f_full <= 0:
-        return None
-
-    kelly_stake_budget = bankroll * f_full * config.KELLY_FRACTION
-    if max_stake is not None:
-        kelly_stake_budget = min(kelly_stake_budget, max_stake)
-    if kelly_stake_budget <= 0:
-        return None
-
-    # Budget is a dollar ceiling on effective stake. Target shares = budget / eff_stake.
-    target_shares = int(math.floor(kelly_stake_budget / eff_stake))
-    shares = min(target_shares, pos_shares)
-    if shares <= 0:
-        return None
+    f_full, shares = kelly
 
     filled, price_stake, detail = _fill_shares(pos_levels, shares)
     if filled <= 0:

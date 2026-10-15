@@ -11,6 +11,7 @@ adapters/common.py to avoid inverting the import dependency.
 import os
 from typing import Optional
 
+import pmev_pricing as _pp
 from pmev.adapters.common import LEAGUE_TO_PIN_SPORT
 
 # ---------------------------------------------------------------------------
@@ -18,7 +19,7 @@ from pmev.adapters.common import LEAGUE_TO_PIN_SPORT
 #    dashboard so a restart can be confirmed visually (number changes on deploy).
 # ---------------------------------------------------------------------------
 
-APP_VERSION = 11
+APP_VERSION = 12
 
 # ---------------------------------------------------------------------------
 # 1. Market enablement  (moved verbatim from market_config.py)
@@ -262,6 +263,19 @@ SANITY_MAX_EDGE_PCT_PROP = float(os.getenv("SANITY_MAX_EDGE_PROP", "25.0"))
 CEILING_LOG_FRAC = float(os.getenv("CEILING_LOG_FRAC", "0.8"))
 
 
+def edge_gate_inputs(book: str, market_type: str):
+    """(floor, fee_rate, margin) for a (book, market_type); rate is None for an
+    unknown book. Use when: handing the edge-floor inputs to the C++ pricing
+    core (min_edge_pct, ev.evaluate) so the fallback rules live in one place."""
+    floor = EDGE_FLOOR_PCT.get(
+        (book, market_type),
+        PROP_MIN_EDGE_PCT if market_type == "player_prop" else MIN_EDGE_PCT,
+    )
+    rate = PER_BOOK_FEE_RATE.get(book)
+    margin = EDGE_MARGIN_PP.get((book, market_type), 1.0)
+    return floor, rate, margin
+
+
 def min_edge_pct(book: str, market_type: str, avg_fill_price) -> float:
     """Minimum edge_pct required to place a bet on this book at this fill price.
     Use when: gating placement or display in paper_tracker, real_tracker,
@@ -272,16 +286,8 @@ def min_edge_pct(book: str, market_type: str, avg_fill_price) -> float:
     - Unknown (book, market_type) key → floor from scalar defaults, margin 1.0.
     - Known book with any market_type → fee formula applies.
     """
-    floor = EDGE_FLOOR_PCT.get(
-        (book, market_type),
-        PROP_MIN_EDGE_PCT if market_type == "player_prop" else MIN_EDGE_PCT,
-    )
-    rate = PER_BOOK_FEE_RATE.get(book)
-    if rate is None or avg_fill_price is None:
-        return floor
-    margin = EDGE_MARGIN_PP.get((book, market_type), 1.0)
-    be_plus_margin = 100.0 * rate * (1.0 - avg_fill_price) + margin
-    return max(floor, be_plus_margin)
+    floor, rate, margin = edge_gate_inputs(book, market_type)
+    return _pp.min_edge_floor(floor, rate, avg_fill_price, margin)
 
 
 # Calibration haircut applied to Pinnacle's devigged fair probability before any
@@ -299,7 +305,7 @@ def haircut_fair(p):
     scanner bets and sizes against. None in, None out; K=0 is an exact no-op."""
     if p is None:
         return None
-    return p - HAIRCUT_K * p * (1.0 - p)
+    return _pp.haircut_fair(p, HAIRCUT_K)
 
 
 # ---------------------------------------------------------------------------
